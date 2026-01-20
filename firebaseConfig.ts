@@ -1,46 +1,20 @@
 // Import the functions you need from the SDKs you need
 import { initializeApp } from "firebase/app";
-import { getDatabase, Database } from "firebase/database";
+import { getDatabase } from "firebase/database";
+// TODO: Add SDKs for Firebase products that you want to use
+// https://firebase.google.com/docs/web/setup#available-libraries
 
-// Your web app's Firebase configuration is now read from environment variables
+// Your web app's Firebase configuration
 const firebaseConfig = {
-  apiKey: process.env.FIREBASE_API_KEY,
-  authDomain: process.env.FIREBASE_AUTH_DOMAIN,
-  databaseURL: process.env.FIREBASE_DATABASE_URL,
-  projectId: process.env.FIREBASE_PROJECT_ID,
-  storageBucket: process.env.FIREBASE_STORAGE_BUCKET,
-  messagingSenderId: process.env.FIREBASE_MESSAGING_SENDER_ID,
-  appId: process.env.FIREBASE_APP_ID,
-  measurementId: process.env.FIREBASE_MEASUREMENT_ID
+  apiKey: "AIzaSyDVSqnEe1o57urBRrMKGiY_IOyOLmRSVw4",
+  authDomain: "teenpatti-b626a.firebaseapp.com",
+  databaseURL: "https://teenpatti-b626a-default-rtdb.asia-southeast1.firebasedatabase.app/"
+  projectId: "teenpatti-b626a",
+  storageBucket: "teenpatti-b626a.firebasestorage.app",
+  messagingSenderId: "687205335645",
+  appId: "1:687205335645:web:d11951f51c3a7b5fdc03b4"
 };
 
-export let isFirebaseConfigured = false;
-export let db: Database | null = null;
-
-// --- Configuration Validation ---
-// Check if essential Firebase config values are present and not just the string "undefined".
-if (
-  firebaseConfig.apiKey && firebaseConfig.apiKey !== 'undefined' &&
-  firebaseConfig.authDomain &&
-  firebaseConfig.databaseURL &&
-  firebaseConfig.projectId
-) {
-  // Initialize Firebase
-  const app = initializeApp(firebaseConfig);
-  db = getDatabase(app);
-  isFirebaseConfigured = true;
-} else {
-  // If config is missing, log a warning and the app will run in mock mode.
-  const warningMessage = `
-    *****************************************************************
-    * WARNING: FIREBASE CONFIGURATION MISSING OR INCOMPLETE.        *
-    * The app will run in local-only mock mode without real-time    *
-    * features. Game state will not be saved or synced.             *
-    *                                                               *
-    * To enable Firebase, create a .env.local file in the project   *
-    * root with your Firebase credentials. See README.md for        *
-    * instructions.                                                 *
-    *****************************************************************
-  `;
-  console.warn(warningMessage);
-}
+// Initialize Firebase
+const app = initializeApp(firebaseConfig);
+export const db = getDatabase(app);
