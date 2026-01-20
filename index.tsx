@@ -1,18 +1,15 @@
 
 import React, { useState, useEffect, ReactNode, FC, useMemo, useCallback, useRef, Component, ErrorInfo } from "react";
 import { createRoot } from "react-dom/client";
-import {TOTAL_NUMBERS, WINNING_PATTERNS, SUPPORT_PHONE, getNickname } from "./constants";
-import { api, GameState, Ticket, TicketGrid, Winners, TicketCell, PrizeConfig } from "./api";
+import { SUPPORT_PHONE } from "./constants";
 import { createPortal } from "react-dom";
-import { GoogleGenAI, Modality } from "@google/genai";
 import { db, isFirebaseConfigured } from './firebaseConfig';
 import { ref, onValue, runTransaction, set, get, Unsubscribe, update } from "firebase/database";
 import './index.css';
 
 // --- Types ---
-type GameCategory = 'housie' | 'teenpatti' | 'spades' | 'rummy';
+type GameCategory = 'teenpatti' | 'spades' | 'rummy';
 const gameCategories: { key: GameCategory, label: string, color: string, icon: string }[] = [
-    { key: 'housie', label: 'Housie', color: 'from-blue-600 to-indigo-600', icon: '🎱' },
     { key: 'teenpatti', label: 'Teen Patti', color: 'from-green-600 to-emerald-600', icon: '🃏' },
     { key: 'spades', label: 'Spades', color: 'from-gray-700 to-gray-900', icon: '♠️' },
     { key: 'rummy', label: 'Rummy', color: 'from-red-600 to-rose-600', icon: '🀄' },
@@ -120,37 +117,6 @@ const formatTime = (totalSeconds: number): string => {
     return `${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`;
 };
 
-// --- Audio Decoding Helpers for TTS ---
-function decode(base64: string) {
-    const binaryString = atob(base64);
-    const len = binaryString.length;
-    const bytes = new Uint8Array(len);
-    for (let i = 0; i < len; i++) {
-        bytes[i] = binaryString.charCodeAt(i);
-    }
-    return bytes;
-}
-
-async function decodeAudioData(
-    data: Uint8Array,
-    ctx: AudioContext,
-    sampleRate: number,
-    numChannels: number,
-): Promise<AudioBuffer> {
-    const dataInt16 = new Int16Array(data.buffer);
-    const frameCount = dataInt16.length / numChannels;
-    const buffer = ctx.createBuffer(numChannels, frameCount, sampleRate);
-
-    for (let channel = 0; channel < numChannels; channel++) {
-        const channelData = buffer.getChannelData(channel);
-        for (let i = 0; i < frameCount; i++) {
-            channelData[i] = dataInt16[i * numChannels + channel] / 32768.0;
-        }
-    }
-    return buffer;
-}
-
-
 // --- Reusable UI Components ---
 
 const OrientationGuard = ({ children }: { children?: ReactNode }) => {
@@ -222,9 +188,9 @@ const PlayingCard: FC<PlayingCardProps> = ({
 
 // Moved from inside SettingsModal to prevent re-creation on every render
 const TabButton: FC<{
-    tab: 'housie' | 'teenpatti' | 'spades' | 'rummy';
-    activeTab: 'housie' | 'teenpatti' | 'spades' | 'rummy';
-    onClick: (tab: 'housie' | 'teenpatti' | 'spades' | 'rummy') => void;
+    tab: 'teenpatti' | 'spades' | 'rummy';
+    activeTab: 'teenpatti' | 'spades' | 'rummy';
+    onClick: (tab: 'teenpatti' | 'spades' | 'rummy') => void;
     children: ReactNode;
 }> = ({ tab, activeTab, onClick, children }) => (
     <button 
@@ -233,29 +199,14 @@ const TabButton: FC<{
     >{children}</button>
 );
 
-// Moved from inside SettingsModal to prevent re-creation on every render
-const NumberDisplay: FC<{label: string, value: number | null}> = ({label, value}) => (
-    <div className="flex flex-col items-center justify-center bg-gray-100 p-2 rounded-lg text-center h-24">
-        <span className="text-xs font-bold text-gray-500 uppercase">{label}</span>
-        <span className="text-4xl font-black text-gray-800">{value ?? '-'}</span>
-    </div>
-);
-
-
 // Help & Support Modal
 const SettingsModal = ({ 
     isOpen, onClose, 
-    // Housie Props
-    housieGameState, onUpdateHousieSettings, onResetHousieGame, onCallNextHousieNumber,
     // Teen Patti Props
     tpGameIds, onRegenerateTPIds, tpPlayerConfigs, tpBookedTables, tpTableTimers, onSaveTPSettingsAsync
 }: { 
     isOpen: boolean, 
     onClose: () => void,
-    housieGameState: GameState | null,
-    onUpdateHousieSettings: (settings: Partial<GameState>) => Promise<void>,
-    onResetHousieGame: () => Promise<void>,
-    onCallNextHousieNumber: () => void,
     tpGameIds: Record<number, string[]>,
     onRegenerateTPIds: (boot: number) => Promise<void>,
     tpPlayerConfigs: AllPlayerConfigs,
@@ -265,17 +216,7 @@ const SettingsModal = ({
 }) => {
     const [query, setQuery] = useState('');
     const [isAdmin, setIsAdmin] = useState(false);
-    const [activeTab, setActiveTab] = useState<'housie' | 'teenpatti' | 'spades' | 'rummy'>('housie');
-    const [isConfirmingReset, setIsConfirmingReset] = useState(false);
-
-    // Housie local state
-    const [localPrizes, setLocalPrizes] = useState<Record<string, PrizeConfig>>({});
-    const [localTicketLimit, setLocalTicketLimit] = useState(100);
-    const [localScheduledTime, setLocalScheduledTime] = useState('');
-    const [bookName, setBookName] = useState('');
-    const [bookTicketNumbers, setBookTicketNumbers] = useState('');
-    const [unbookName, setUnbookName] = useState('');
-    const [unbookTicketNumbers, setUnbookTicketNumbers] = useState('');
+    const [activeTab, setActiveTab] = useState<'teenpatti' | 'spades' | 'rummy'>('teenpatti');
     
     // Teen Patti local state
     const [localTPPlayerConfigs, setLocalTPPlayerConfigs] = useState<AllPlayerConfigs>({});
@@ -284,25 +225,12 @@ const SettingsModal = ({
     
     useEffect(() => {
         if (isOpen) {
-            // housie
-            if (housieGameState) {
-                setLocalPrizes(JSON.parse(JSON.stringify(housieGameState.prizesConfig)));
-                setLocalTicketLimit(housieGameState.activeTicketLimit);
-                setLocalScheduledTime(housieGameState.scheduledStartTime || '');
-            }
             // teen patti
             setLocalTPPlayerConfigs(JSON.parse(JSON.stringify(tpPlayerConfigs)));
             setLocalTPBookedTables(JSON.parse(JSON.stringify(tpBookedTables)));
             setLocalTPTableTimers(JSON.parse(JSON.stringify(tpTableTimers)));
-        } else {
-            // Reset local state on close
-            setBookName('');
-            setBookTicketNumbers('');
-            setUnbookName('');
-            setUnbookTicketNumbers('');
-            setIsConfirmingReset(false);
         }
-    }, [isOpen, housieGameState, tpPlayerConfigs, tpBookedTables, tpTableTimers]);
+    }, [isOpen, tpPlayerConfigs, tpBookedTables, tpTableTimers]);
     
     useEffect(() => {
         if (query === (process.env.ADMIN_PASSWORD || 'admin')) { setIsAdmin(true); }
@@ -314,110 +242,7 @@ const SettingsModal = ({
         window.open(`https://wa.me/${SUPPORT_PHONE}?text=${encodeURIComponent(text)}`, '_blank');
         onClose(); setQuery('');
     };
-
-    const handleBookTickets = async () => {
-        if (!housieGameState) return;
-        if (!bookName.trim() || !bookTicketNumbers.trim()) {
-            alert("Please provide both player name and ticket IDs to book.");
-            return;
-        }
-        
-        const newTickets = structuredClone(housieGameState.extraTickets);
-        const ticketIdsToBook = bookTicketNumbers.split(',').map(id => parseInt(id.trim())).filter(id => !isNaN(id) && id > 0);
-        
-        const booked = [];
-        const alreadyOwned = [];
-        
-        for(const ticketId of ticketIdsToBook) {
-            const ticket = newTickets.find((t) => t.id === ticketId);
-            if (ticket) {
-                if (ticket.owner === null) {
-                    ticket.owner = bookName.trim();
-                    booked.push(ticketId);
-                } else {
-                    alreadyOwned.push(ticketId);
-                }
-            }
-        }
-        
-        try {
-            await onUpdateHousieSettings({ extraTickets: newTickets });
-            let message = '';
-            if (booked.length > 0) message += `Booked tickets: ${booked.join(', ')} for ${bookName.trim()}\n`;
-            if (alreadyOwned.length > 0) message += `Could not book tickets ${alreadyOwned.join(', ')} as they are already owned.`;
-            if (message) alert(message.trim());
-            setBookName('');
-            setBookTicketNumbers('');
-        } catch (error) {
-            console.error("Error booking tickets:", error);
-            alert("Failed to book tickets. Please check your Firebase Database rules to ensure you have write permissions.");
-        }
-    };
-
-    const handleUnbookTickets = async () => {
-        if (!housieGameState) return;
-        if (!unbookName.trim() && !unbookTicketNumbers.trim()) {
-            alert("Please provide either ticket IDs or a player name to unbook.");
-            return;
-        }
     
-        const newTickets = structuredClone(housieGameState.extraTickets);
-        const ticketIdsToUnbook = unbookTicketNumbers.split(',').map(id => parseInt(id.trim())).filter(id => !isNaN(id) && id > 0);
-    
-        let unbookedCount = 0;
-        
-        // Unbooking by numbers
-        if (ticketIdsToUnbook.length > 0) {
-            for (const ticketId of ticketIdsToUnbook) {
-                const ticket = newTickets.find((t) => t.id === ticketId);
-                if (ticket && ticket.owner) {
-                    ticket.owner = null;
-                    unbookedCount++;
-                }
-            }
-        }
-    
-        // Unbooking by name
-        if (unbookName.trim()) {
-            for(const ticket of newTickets) {
-                if (ticket.owner === unbookName.trim()) {
-                    ticket.owner = null;
-                    if (!ticketIdsToUnbook.includes(ticket.id)) unbookedCount++;
-                }
-            }
-        }
-    
-        try {
-            await onUpdateHousieSettings({ extraTickets: newTickets });
-            if (unbookedCount > 0) {
-                alert(`Successfully unbooked ${unbookedCount} ticket(s).`);
-            } else {
-                alert("No matching tickets found to unbook.");
-            }
-            setUnbookName('');
-            setUnbookTicketNumbers('');
-        } catch (error) {
-            console.error("Error unbooking tickets:", error);
-            alert("Failed to unbook tickets. Please check your Firebase Database rules to ensure you have write permissions.");
-        }
-    };
-    
-    const handleHousieSave = async () => {
-        if (!housieGameState) return;
-        try {
-            await onUpdateHousieSettings({
-                prizesConfig: localPrizes,
-                activeTicketLimit: localTicketLimit,
-                scheduledStartTime: localScheduledTime
-            });
-            alert("Housie settings saved successfully.");
-            onClose();
-        } catch (error) {
-            console.error("Error saving Housie settings:", error);
-            alert("Failed to save Housie settings. Please check your Firebase Database rules to ensure you have write permissions.");
-        }
-    };
-
     const handleTPSave = async () => {
         await onSaveTPSettingsAsync({
             configs: localTPPlayerConfigs,
@@ -442,126 +267,6 @@ const SettingsModal = ({
     };
 
     if (!isOpen) return null;
-
-    const renderHousieAdmin = () => (
-        <div className="space-y-6">
-            <div>
-                <h3 className="font-bold text-gray-700 mb-2 border-b pb-2">Game Actions</h3>
-                <div className="bg-blue-50 border border-blue-200 p-4 rounded-xl space-y-4">
-                    <div className="grid grid-cols-3 gap-2">
-                        <NumberDisplay label="Previous" value={housieGameState?.previousNumber || null} />
-                        <NumberDisplay label="Current" value={housieGameState?.currentNumber || null} />
-                        <NumberDisplay label="Next" value={housieGameState?.shuffledQueue?.[0] || null} />
-                    </div>
-                     <button 
-                        onClick={onCallNextHousieNumber} 
-                        className="w-full bg-blue-600 text-white px-4 py-3 rounded-lg text-sm font-bold shadow active:scale-95 disabled:opacity-50" 
-                        disabled={housieGameState?.isGameOver || (housieGameState?.shuffledQueue?.length ?? 0) === 0}
-                    >
-                        CALL NEXT NUMBER
-                    </button>
-                    <div className="flex justify-center items-center gap-2 flex-wrap pt-2">
-                        <button onClick={() => onUpdateHousieSettings({ isAutoPlaying: !housieGameState?.isAutoPlaying })} className={`px-4 py-2 rounded-lg text-xs font-bold border shadow-sm active:scale-95 ${housieGameState?.isAutoPlaying ? 'bg-red-50 text-red-600 border-red-200' : 'bg-white text-gray-700 border-gray-300'}`}>
-                            {housieGameState?.isAutoPlaying ? 'Stop Auto' : 'Auto Play'}
-                        </button>
-                        
-                        {!isConfirmingReset ? (
-                            <button 
-                                onClick={() => setIsConfirmingReset(true)} 
-                                className="px-4 py-2 rounded-lg text-xs font-bold border shadow-sm active:scale-95 bg-red-600 hover:bg-red-700 text-white border-red-700"
-                            >
-                                Reset Game
-                            </button>
-                        ) : (
-                            <div className="flex items-center gap-2 bg-red-50 border border-red-200 p-2 rounded-lg">
-                                <span className="text-xs font-bold text-red-700">Are you sure?</span>
-                                <button
-                                    onClick={async () => {
-                                        try {
-                                            await onResetHousieGame();
-                                            alert("Housie game has been reset successfully.");
-                                            setIsConfirmingReset(false);
-                                            onClose();
-                                        } catch (error) {
-                                            console.error("Failed to reset Housie game:", error);
-                                            alert("Failed to reset game. Please check your Firebase Database rules to ensure you have write permissions.");
-                                        }
-                                    }}
-                                    className="px-3 py-1 rounded-md text-xs font-bold border shadow-sm active:scale-95 bg-red-600 hover:bg-red-700 text-white border-red-700"
-                                >
-                                    Yes, Reset
-                                </button>
-                                <button
-                                    onClick={() => setIsConfirmingReset(false)}
-                                    className="px-3 py-1 rounded-md text-xs font-bold border shadow-sm active:scale-95 bg-white hover:bg-gray-100 text-gray-700 border-gray-300"
-                                >
-                                    Cancel
-                                </button>
-                            </div>
-                        )}
-                    </div>
-                </div>
-            </div>
-
-            <div>
-                <h3 className="font-bold text-gray-700 mb-2 border-b pb-2">Game Start Time</h3>
-                <p className="text-xs text-gray-500 mb-3">Set a time for the game to start automatically. The first number will be called at this time.</p>
-                <input 
-                    type="datetime-local"
-                    value={localScheduledTime}
-                    onChange={e => setLocalScheduledTime(e.target.value)}
-                    className="w-full p-2 border rounded"
-                />
-            </div>
-            
-            <div>
-                <h3 className="font-bold text-gray-700 mb-2 border-b pb-2">Prizes Configuration</h3>
-                <p className="text-xs text-gray-500 mb-3">Set winner count for each prize. Set to 0 to disable a prize.</p>
-                <div className="grid grid-cols-2 gap-4">
-                    {WINNING_PATTERNS.map(p => (
-                        <div key={p.key} className="flex items-center justify-between bg-gray-50 p-2 rounded border">
-                            <label className="text-sm font-semibold text-gray-600">{p.label}</label>
-                            <input 
-                                type="number" 
-                                min="0"
-                                value={localPrizes[p.key]?.count ?? 1}
-                                onChange={e => setLocalPrizes(prev => ({...prev, [p.key]: {...(prev[p.key] || {label: p.label}), count: parseInt(e.target.value) || 0 }}))}
-                                className="w-16 p-1 text-center font-bold border rounded"
-                            />
-                        </div>
-                    ))}
-                </div>
-            </div>
-
-            <div>
-                 <h3 className="font-bold text-gray-700 mb-2 border-b pb-2">Ticket Management</h3>
-                 <div className="space-y-4">
-                     <div className="flex items-center justify-between">
-                         <label className="text-sm font-semibold text-gray-600">Active Tickets Limit</label>
-                         <input type="number" min="1" max={housieGameState?.extraTickets.length || 100} value={localTicketLimit} onChange={e => setLocalTicketLimit(parseInt(e.target.value))} className="w-24 p-1 text-center font-bold border rounded" />
-                     </div>
-                     <div className="bg-gray-50 p-3 rounded-lg border space-y-2">
-                        <h4 className="text-sm font-bold">Book Tickets</h4>
-                        <div className="flex gap-2 items-center">
-                             <input type="text" placeholder="Ticket IDs, e.g., 1, 8" value={bookTicketNumbers} onChange={e => setBookTicketNumbers(e.target.value)} className="w-2/5 p-2 border rounded text-sm" />
-                             <input type="text" placeholder="Player Name" value={bookName} onChange={e => setBookName(e.target.value)} className="flex-1 p-2 border rounded text-sm" />
-                             <button onClick={handleBookTickets} className="bg-blue-600 text-white font-bold px-4 py-2 rounded-lg text-xs active:scale-95">Book</button>
-                        </div>
-                     </div>
-                     <div className="bg-gray-50 p-3 rounded-lg border space-y-2">
-                        <h4 className="text-sm font-bold">Unbook Tickets</h4>
-                        <div className="flex gap-2 items-center">
-                            <input type="text" placeholder="Ticket IDs or Player's Name" value={unbookTicketNumbers} onChange={e => setUnbookTicketNumbers(e.target.value)} className="w-2/5 p-2 border rounded text-sm" />
-                            <input type="text" placeholder="Player's Name" value={unbookName} onChange={e => setUnbookName(e.target.value)} className="flex-1 p-2 border rounded text-sm" />
-                            <button onClick={handleUnbookTickets} className="bg-red-600 text-white font-bold px-4 py-2 rounded-lg text-xs active:scale-95">Unbook</button>
-                        </div>
-                     </div>
-                 </div>
-            </div>
-
-             <button onClick={handleHousieSave} className="w-full bg-blue-600 hover:bg-blue-700 text-white font-black py-3 rounded-xl shadow-lg active:scale-95 transition-all text-sm uppercase">Save Housie Settings</button>
-        </div>
-    );
 
     const renderTPAdmin = () => (
         <div className="space-y-6">
@@ -650,13 +355,11 @@ const SettingsModal = ({
                     {isAdmin ? (
                         <div>
                             <div className="flex border-b mb-4">
-                               <TabButton tab="housie" activeTab={activeTab} onClick={setActiveTab}>Housie</TabButton>
                                <TabButton tab="teenpatti" activeTab={activeTab} onClick={setActiveTab}>Teen Patti</TabButton>
                                <TabButton tab="spades" activeTab={activeTab} onClick={setActiveTab}>Spades</TabButton>
                                <TabButton tab="rummy" activeTab={activeTab} onClick={setActiveTab}>Rummy</TabButton>
                             </div>
                             <div className="max-h-[60vh] overflow-y-auto custom-scrollbar p-2">
-                                {activeTab === 'housie' && renderHousieAdmin()}
                                 {activeTab === 'teenpatti' && renderTPAdmin()}
                                 {activeTab === 'spades' && <div className="text-center p-8 text-gray-500">Spades settings coming soon.</div>}
                                 {activeTab === 'rummy' && <div className="text-center p-8 text-gray-500">Rummy settings coming soon.</div>}
@@ -863,357 +566,6 @@ const RummyGame: FC = () => <div className="w-full h-full bg-red-800 flex items-
 // --- Spades Game ---
 const SpadesGame: FC = () => <div className="w-full h-full bg-gray-800 flex items-center justify-center text-white text-3xl font-black">Spades - Coming Soon!</div>;
 
-// --- Housie Game Helpers ---
-
-const CurrentNumberBubble: FC<{ currentNumber: number | null }> = ({ currentNumber }) => {
-    if (currentNumber === null) return null;
-
-    return (
-        <div key={currentNumber} className="fixed top-24 right-4 z-[150] w-20 h-20 bg-white rounded-full flex flex-col items-center justify-center shadow-2xl border-4 border-red-500 animate-pop">
-            <span className="text-4xl font-black text-gray-800 tracking-tight">{currentNumber}</span>
-        </div>
-    );
-};
-
-const HousieBoard: FC<{ calledNumbers: number[], currentNumber: number | null }> = ({ calledNumbers, currentNumber }) => {
-    return (
-        <div className="rounded-xl shadow-lg overflow-hidden relative">
-            <div className="bg-teal-700 text-white p-3 relative z-10">
-                 <h2 className="text-sm font-bold uppercase tracking-widest">Master Board (1-90)</h2>
-            </div>
-            <div className="grid grid-cols-10 gap-1 content-start bg-[#1a4d2e] p-3 border-2 border-t-0 border-[#143d24] rounded-b-xl relative">
-                <div className="absolute inset-0 flex items-center justify-center pointer-events-none z-0">
-                    <span className="text-[20rem] font-black text-white opacity-5 -rotate-12 select-none">SG</span>
-                </div>
-                {Array.from({ length: 90 }, (_, i) => i + 1).map(num => {
-                    const isCalled = calledNumbers.includes(num);
-                    const isCurrent = num === currentNumber;
-                    return (
-                        <div 
-                            key={num} 
-                            className={`
-                                aspect-square flex items-center justify-center rounded text-sm sm:text-base font-black transition-all duration-300 relative z-10
-                                ${isCalled ? 'bg-white text-[#1a4d2e] shadow-md scale-100' : 'bg-black/20 text-white/20'}
-                                ${isCurrent ? 'ring-2 ring-yellow-400 scale-110 z-20' : ''}
-                            `}
-                        >
-                            {num}
-                            {isCurrent && <div className="absolute inset-0 bg-yellow-400 rounded opacity-30 animate-ping"></div>}
-                        </div>
-                    );
-                })}
-            </div>
-        </div>
-    );
-};
-
-const HousieTicket: FC<{ ticket: Ticket, calledNumbers: number[], onBookTicket?: (ticket: Ticket) => void }> = ({ ticket, calledNumbers, onBookTicket }) => {
-    const isBooked = ticket.owner !== null;
-
-    return (
-        <div className="bg-pink-50 rounded-lg shadow-md w-full overflow-hidden mb-4 border-4 border-double border-gray-300">
-            <div className="flex justify-between items-center px-3 py-1.5 border-b-2 border-violet-300 bg-violet-200">
-                 <span className="font-bold text-violet-800 text-sm">TICKET NO. {ticket.id}</span>
-                 {isBooked ? (
-                    <span className="text-[10px] font-bold px-2 py-0.5 rounded uppercase bg-gray-800 text-white">
-                        BOOKED: {ticket.owner}
-                    </span>
-                 ) : (
-                    onBookTicket && <button onClick={() => onBookTicket(ticket)} className="bg-green-500 hover:bg-green-600 text-white font-bold text-xs px-4 py-2 rounded-lg shadow transition-transform active:scale-95">
-                        Book Now
-                    </button>
-                 )}
-            </div>
-            <div className="p-2">
-                <div className="border border-gray-300 rounded overflow-hidden">
-                    {ticket.grid.map((row, rIdx) => (
-                        <div key={rIdx} className="grid grid-cols-9">
-                            {row.map((cell, cIdx) => {
-                                const isMarked = cell !== null && calledNumbers.includes(cell);
-                                return (
-                                    <div
-                                        key={cIdx}
-                                        className={`
-                                            flex items-center justify-center h-8 sm:h-10 text-sm sm:text-base
-                                            border-r border-gray-300 last:border-r-0
-                                            ${rIdx < 2 ? 'border-b border-gray-300' : ''}
-                                            ${isMarked ? 'bg-yellow-300 text-black font-black' : 'text-gray-800 font-bold'}
-                                            ${cell === null ? 'bg-pink-100/70' : ''}
-                                        `}
-                                    >
-                                        {cell}
-                                    </div>
-                                );
-                            })}
-                        </div>
-                    ))}
-                </div>
-            </div>
-        </div>
-    );
-};
-
-const HousieGame: FC<{ gameState: GameState | null, onBookTicket: (ticket: Ticket) => void }> = ({ gameState, onBookTicket }) => {
-    const [currentTime, setCurrentTime] = useState(new Date());
-    const [showAllCalled, setShowAllCalled] = useState(false);
-    const [ticketFilter, setTicketFilter] = useState('');
-    const audioContextRef = useRef<AudioContext | null>(null);
-
-    useEffect(() => {
-        const timer = setInterval(() => setCurrentTime(new Date()), 1000);
-        return () => clearInterval(timer);
-    }, []);
-
-    // TTS Logic
-    useEffect(() => {
-        // Initialize AudioContext once
-        if (!audioContextRef.current) {
-            audioContextRef.current = new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate: 24000 });
-        }
-        const audioContext = audioContextRef.current;
-        if (!audioContext) return;
-
-        const speakNumber = async (num: number) => {
-            const fallbackTTS = () => {
-                const nickname = getNickname(num);
-                const text = `${nickname}. ${num}`;
-                const utterance = new SpeechSynthesisUtterance(text);
-                utterance.rate = 1.1;
-                window.speechSynthesis.cancel(); 
-                window.speechSynthesis.speak(utterance);
-            };
-
-            try {
-                // Check if API key is configured. If not, fallback to browser's speech synthesis.
-                if (!process.env.API_KEY || process.env.API_KEY === 'undefined') {
-                    console.warn("Gemini API key not configured. Falling back to browser TTS for announcements.");
-                    fallbackTTS();
-                    return;
-                }
-
-                const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
-                const nickname = getNickname(num);
-                const textToSpeak = `${nickname}. ${num}`;
-
-                const response = await ai.models.generateContent({
-                    model: "gemini-2.5-flash-preview-tts",
-                    contents: [{ parts: [{ text: textToSpeak }] }],
-                    config: {
-                        responseModalities: [Modality.AUDIO],
-                        speechConfig: {
-                            voiceConfig: {
-                                prebuiltVoiceConfig: { voiceName: 'Kore' },
-                            },
-                        },
-                    },
-                });
-                
-                const base64Audio = response.candidates?.[0]?.content?.parts?.[0]?.inlineData?.data;
-
-                if (base64Audio) {
-                    const audioBuffer = await decodeAudioData(
-                        decode(base64Audio),
-                        audioContext,
-                        24000,
-                        1,
-                    );
-                    const source = audioContext.createBufferSource();
-                    source.buffer = audioBuffer;
-                    source.connect(audioContext.destination);
-                    source.start();
-                } else {
-                    console.error("No audio data received from TTS API. Falling back.");
-                    fallbackTTS();
-                }
-            } catch (error) {
-                console.error("Error with TTS API, falling back to browser TTS:", error);
-                fallbackTTS();
-            }
-        };
-
-        if (gameState?.currentNumber) {
-            speakNumber(gameState.currentNumber);
-        }
-    }, [gameState?.currentNumber]);
-
-    // Auto play logic
-    useEffect(() => {
-        let interval: any;
-        if (gameState?.isAutoPlaying && !gameState.isGameOver) {
-            interval = setInterval(() => {
-                api.callNumber();
-            }, 5000); 
-        }
-        return () => clearInterval(interval);
-    }, [gameState?.isAutoPlaying, gameState?.isGameOver]);
-    
-    const filteredTickets = useMemo(() => {
-        if (!gameState?.extraTickets) {
-            return [];
-        }
-
-        const activeTickets = gameState.extraTickets.slice(0, gameState.activeTicketLimit);
-        
-        const trimmedFilter = ticketFilter.trim();
-        if (!trimmedFilter) {
-            return activeTickets;
-        }
-
-        const isNumericFilter = /^[0-9, ]+$/.test(trimmedFilter);
-
-        if (isNumericFilter) {
-            const searchIds = trimmedFilter.split(',').map(s => parseInt(s.trim())).filter(n => !isNaN(n));
-            if (searchIds.length === 0) return activeTickets;
-            return activeTickets.filter(ticket => searchIds.includes(ticket.id));
-        } else {
-            return activeTickets.filter(ticket => 
-                ticket.owner?.toLowerCase().includes(trimmedFilter.toLowerCase())
-            );
-        }
-    }, [gameState, ticketFilter]);
-
-    if (!gameState || !Array.isArray(gameState.calledNumbers) || !Array.isArray(gameState.extraTickets)) {
-        return (
-            <div className="w-full h-full flex flex-col items-center justify-center bg-slate-900 text-white">
-                <div className="w-12 h-12 border-4 border-blue-500 border-t-transparent rounded-full animate-spin mb-4"></div>
-                <h2 className="text-xl font-black uppercase tracking-widest animate-pulse">Loading Game...</h2>
-                <p className="text-sm text-slate-400 mt-2">If this persists, the database may be empty or inaccessible.</p>
-            </div>
-        );
-    }
-    
-    const displayedCalls = showAllCalled ? gameState.calledNumbers : gameState.calledNumbers.slice(-11);
-    const formattedTime = currentTime.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-    const formattedDate = currentTime.toLocaleDateString([], { weekday: 'short', day: 'numeric', month: 'short', year: 'numeric' });
-
-    return (
-        <div className="w-full h-full bg-slate-50 flex flex-col font-sans relative overflow-hidden">
-             <CurrentNumberBubble currentNumber={gameState.currentNumber} />
-            <div className="bg-[#1e3a8a] text-white px-4 py-2 flex justify-between items-center text-[10px] sm:text-xs font-bold tracking-widest shrink-0 z-50 shadow-md">
-                <span className="uppercase text-yellow-400">Official Game Time</span>
-                <span>{formattedDate} • {formattedTime}</span>
-            </div>
-
-            <div className="flex-1 overflow-y-auto pb-8 custom-scrollbar pt-6">
-                
-                <div className="text-center px-4 mb-6 space-y-2">
-                    <h1 className="text-2xl font-black text-gray-800 uppercase tracking-tight">Welcome to the Game</h1>
-                    <p className="text-blue-600 font-bold text-sm mb-2">Live Tambola Experience</p>
-                    {gameState.calledNumbers.length > 0 && !gameState.isGameOver && (
-                        <div className="flex items-center justify-center gap-2 bg-red-500 text-white font-bold text-xs px-4 py-1 rounded-full mx-auto w-fit">
-                            <span className="w-2 h-2 bg-white rounded-full animate-blink"></span>
-                            LIVE
-                        </div>
-                    )}
-                </div>
-
-                <div className="px-4 mb-6">
-                    <HousieBoard calledNumbers={gameState.calledNumbers} currentNumber={gameState.currentNumber} />
-                </div>
-
-                <div className="px-4 mb-6">
-                    <div className="bg-white border border-gray-200 rounded-xl shadow-sm overflow-hidden">
-                        <div className="bg-indigo-700 text-white p-3 flex justify-between items-center">
-                            <h3 className="text-sm font-black uppercase tracking-widest">Recent Calls</h3>
-                            <button onClick={() => setShowAllCalled(!showAllCalled)} className="text-xs bg-white/20 hover:bg-white/30 px-3 py-1 rounded-full font-bold">
-                                {showAllCalled ? 'Hide' : `Show All (${gameState.calledNumbers.length})`}
-                            </button>
-                        </div>
-                        <div className="p-3">
-                            {displayedCalls.length === 0 ? (
-                                <div className="flex min-h-[3rem] items-center justify-center">
-                                    <span className="text-gray-400 text-xs italic">Waiting for first number...</span>
-                                </div>
-                            ) : (
-                                <div className={`pb-1 ${showAllCalled ? 'grid grid-cols-11 gap-2' : 'flex items-center gap-2'}`}>
-                                    {displayedCalls.map((num, i, arr) => {
-                                        const isHighlighted = i === arr.length - 1;
-                                        return (
-                                            <div key={`${num}-${i}`} className={`
-                                                flex-1 aspect-square rounded-full flex items-center justify-center font-black text-xs border shadow-sm transition-all duration-200
-                                                ${isHighlighted
-                                                    ? 'bg-yellow-400 text-blue-900 border-yellow-500 scale-110'
-                                                    : 'bg-gray-100 text-gray-600 border-gray-200'
-                                                }
-                                            `}>
-                                                {num}
-                                            </div>
-                                        );
-                                    })}
-                                </div>
-                            )}
-                        </div>
-                    </div>
-                </div>
-
-                <div className="px-4">
-                    <div className="bg-slate-700 text-white p-3 rounded-t-xl flex justify-between items-center">
-                        <h3 className="text-sm font-black uppercase tracking-wide">All Tickets <span className="text-slate-400 text-xs">({filteredTickets.length})</span></h3>
-                        <div className="flex gap-2 items-center">
-                            <input 
-                                type="text" 
-                                placeholder="Filter by name or Ticket numbers like 1,3,5" 
-                                value={ticketFilter}
-                                onChange={e => setTicketFilter(e.target.value)}
-                                className="text-xs p-1.5 rounded border border-slate-500 bg-slate-600 text-white placeholder-slate-400 w-36 focus:w-48 transition-all outline-none" 
-                            />
-                            {ticketFilter && (
-                                <button onClick={() => setTicketFilter('')} className="text-xs bg-slate-500 hover:bg-slate-400 px-2 py-1 rounded">Clear</button>
-                            )}
-                        </div>
-                    </div>
-                    
-                    <div className="space-y-3 pt-3 bg-white rounded-b-xl shadow-sm border border-gray-200 p-2">
-                        {filteredTickets.map(ticket => (
-                            <HousieTicket key={ticket.id} ticket={ticket} calledNumbers={gameState.calledNumbers} onBookTicket={onBookTicket} />
-                        ))}
-                    </div>
-                </div>
-
-                <div className="px-4 mt-6">
-                    <div className="bg-white border border-gray-200 rounded-xl shadow-sm overflow-hidden">
-                        <div className="bg-amber-600 text-white p-4 text-center rounded-t-xl">
-                            <h3 className="text-lg font-black uppercase tracking-wide">Winners Board</h3>
-                        </div>
-                        <div className="space-y-2 p-4">
-                            {WINNING_PATTERNS
-                                .filter(p => (gameState.prizesConfig[p.key]?.count ?? 1) > 0)
-                                .map(pattern => {
-                                    const winners = gameState.winners[pattern.key] || [];
-                                    const prizeLimit = gameState.prizesConfig[pattern.key]?.count || 1;
-                                    const isClosed = winners.length >= prizeLimit;
-
-                                    return (
-                                        <div key={pattern.key} className={`
-                                            rounded-lg p-3 flex justify-between items-center shadow-sm border transition-all
-                                            ${isClosed ? 'bg-green-50 border-green-200' : 'bg-gray-50 border-gray-200'}
-                                        `}>
-                                            <div className="flex flex-col flex-1 min-w-0 mr-2">
-                                                <span className="text-xs font-bold text-gray-800 uppercase">{pattern.label}</span>
-                                                {winners.length > 0 && 
-                                                    <span className="text-[10px] text-green-700 font-semibold truncate">
-                                                        Won by: {winners.map(w => `TICKET NO. ${w.id}`).join(', ')}
-                                                    </span>
-                                                }
-                                            </div>
-                                            <div className="flex items-center gap-2">
-                                                <span className={`text-xs font-black px-2 py-1 rounded-full ${isClosed ? 'bg-red-100 text-red-700' : 'bg-green-100 text-green-700'}`}>
-                                                    {winners.length}/{prizeLimit}
-                                                </span>
-                                            </div>
-                                        </div>
-                                    );
-                            })}
-                        </div>
-                    </div>
-                </div>
-            </div>
-             <footer className="sticky bottom-0 bg-gray-800 text-white text-center p-2 text-sm font-bold z-10 shrink-0">
-                🎉 Good Luck to all Players! 🎉
-            </footer>
-        </div>
-    );
-};
 
 const PackedStamp: FC = () => (
     <div className="absolute inset-0 bg-black/60 flex items-center justify-center rounded-full z-20">
@@ -1805,7 +1157,7 @@ const TeenPattiGame: FC<TeenPattiGameProps> = ({
             
             {mainPlayer && (
                 <>
-                    <div className="absolute bottom-8 left-4 flex flex-col items-center gap-2">
+                    <div className="absolute bottom-8 left-2 flex flex-col items-center gap-2">
                         {mainPlayer.cards && mainPlayer.cards.length > 0 && (
                             <div className="relative w-80 h-56 -mt-16">
                                 {mainPlayer.cards.map((card, i) => (
@@ -1853,26 +1205,26 @@ const TeenPattiGame: FC<TeenPattiGameProps> = ({
                                 </div>
                             ) : (
                                 <div className={`bg-black/30 backdrop-blur-sm border border-white/10 p-4 rounded-2xl flex items-end justify-center gap-2 shadow-lg transition-all duration-300 ${!isMyTurn ? 'grayscale opacity-60' : ''}`}>
-                                    <button onClick={() => onPlayerAction('fold', localPlayerUniqueId!)} disabled={!isMyTurn} className="w-16 h-16 bg-red-600 rounded-full flex items-center justify-center font-black text-md uppercase shadow-lg transition-transform active:scale-95 disabled:cursor-not-allowed">Pack</button>
-                                    {!mainPlayer.isSeen && <button onClick={() => onPlayerAction('see', localPlayerUniqueId!)} disabled={!isMyTurn} className="w-16 h-16 bg-yellow-500 rounded-full flex items-center justify-center font-black text-md uppercase shadow-lg transition-transform active:scale-95 disabled:cursor-not-allowed">See</button>}
+                                    <button onClick={() => onPlayerAction('fold', localPlayerUniqueId!)} disabled={!isMyTurn} className="w-14 h-14 bg-red-600 rounded-full flex items-center justify-center font-black text-md uppercase shadow-lg transition-transform active:scale-95 disabled:cursor-not-allowed">Pack</button>
+                                    {!mainPlayer.isSeen && <button onClick={() => onPlayerAction('see', localPlayerUniqueId!)} disabled={!isMyTurn} className="w-14 h-14 bg-yellow-500 rounded-full flex items-center justify-center font-black text-md uppercase shadow-lg transition-transform active:scale-95 disabled:cursor-not-allowed">See</button>}
                                     
                                     {mainPlayer.isSeen && activePlayersCount > 2 &&
-                                        <button onClick={() => onPlayerAction('sideShow', localPlayerUniqueId!)} disabled={!isMyTurn} className="w-16 h-16 bg-purple-600 rounded-full flex flex-col items-center justify-center font-black text-sm uppercase shadow-lg transition-transform active:scale-95 disabled:cursor-not-allowed disabled:bg-gray-500">
+                                        <button onClick={() => onPlayerAction('sideShow', localPlayerUniqueId!)} disabled={!isMyTurn} className="w-14 h-14 bg-purple-600 rounded-full flex flex-col items-center justify-center font-black text-sm uppercase shadow-lg transition-transform active:scale-95 disabled:cursor-not-allowed disabled:bg-gray-500">
                                             Side Show
                                             <span className="text-xs">₹{actionAmount}</span>
                                         </button>
                                     }
                                     
                                     {activePlayersCount === 2 &&
-                                        <button onClick={() => onPlayerAction('show', localPlayerUniqueId!)} disabled={!isMyTurn} className="w-16 h-16 bg-blue-600 rounded-full flex flex-col items-center justify-center font-black text-sm uppercase shadow-lg transition-transform active:scale-95 disabled:cursor-not-allowed disabled:bg-gray-500">
+                                        <button onClick={() => onPlayerAction('show', localPlayerUniqueId!)} disabled={!isMyTurn} className="w-14 h-14 bg-blue-600 rounded-full flex flex-col items-center justify-center font-black text-sm uppercase shadow-lg transition-transform active:scale-95 disabled:cursor-not-allowed disabled:bg-gray-500">
                                             Show
                                             <span className="text-xs">₹{actionAmount}</span>
                                         </button>
                                     }
 
-                                    <button onClick={() => onPlayerAction('chaal', localPlayerUniqueId!)} disabled={!isMyTurn} className="w-24 h-24 bg-green-600 rounded-full flex flex-col items-center justify-center font-black text-lg uppercase shadow-lg transition-transform active:scale-95 disabled:cursor-not-allowed">
+                                    <button onClick={() => onPlayerAction('chaal', localPlayerUniqueId!)} disabled={!isMyTurn} className="w-20 h-20 bg-green-600 rounded-full flex flex-col items-center justify-center font-black text-lg uppercase shadow-lg transition-transform active:scale-95 disabled:cursor-not-allowed">
                                         {mainPlayer.isSeen ? 'Chaal' : 'Blind'}
-                                        <span className="text-2xl">₹{chaalAmount}</span>
+                                        <span className="text-xl">₹{chaalAmount}</span>
                                     </button>
                                 </div>
                             )
@@ -1881,304 +1233,6 @@ const TeenPattiGame: FC<TeenPattiGameProps> = ({
                 </>
             )}
         </div>
-    );
-};
-
-// --- Housie Ticket Status Modal ---
-const AvailableTicketsModal: FC<{
-    isOpen: boolean;
-    onClose: () => void;
-    gameState: GameState | null;
-}> = ({ isOpen, onClose, gameState }) => {
-    const [selectedTicketIds, setSelectedTicketIds] = useState<number[]>([]);
-    const [bookingName, setBookingName] = useState('');
-
-    useEffect(() => {
-        // Reset state when modal opens/closes
-        if (!isOpen) {
-            setSelectedTicketIds([]);
-            setBookingName('');
-        }
-    }, [isOpen]);
-
-    if (!isOpen || !gameState) return null;
-
-    const activeTickets = gameState.extraTickets.slice(0, gameState.activeTicketLimit);
-    const isGameStarted = gameState.calledNumbers.length > 0;
-
-    const handleTicketClick = (ticketId: number) => {
-        if (isGameStarted) return;
-        
-        const ticket = activeTickets.find(t => t.id === ticketId);
-        if (ticket && ticket.owner === null) {
-            setSelectedTicketIds(prev =>
-                prev.includes(ticketId)
-                    ? prev.filter(id => id !== ticketId)
-                    : [...prev, ticketId]
-            );
-        }
-    };
-
-    const handleBookOnWhatsApp = () => {
-        if (!bookingName.trim() || selectedTicketIds.length === 0) return;
-        
-        const ticketNumbers = selectedTicketIds.join(', ');
-        const text = `Hi, I'd like to book Housie ticket(s): ${ticketNumbers} for the name: ${bookingName}.`;
-        
-        window.open(`https://wa.me/${SUPPORT_PHONE}?text=${encodeURIComponent(text)}`, '_blank');
-        onClose();
-    };
-
-    return createPortal(
-        <div className="fixed inset-0 z-[200] flex items-center justify-center bg-black/60 backdrop-blur-sm p-4 animate-pop">
-            <div className="bg-slate-50 rounded-2xl w-full max-w-2xl shadow-2xl overflow-hidden border-2 border-white/10">
-                <div className="p-6 border-b border-slate-200 flex justify-between items-center">
-                    <h2 className="text-xl font-bold text-blue-800">Select Available Tickets</h2>
-                    <button onClick={onClose} className="text-slate-400 hover:text-slate-700 transition-colors">
-                        <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-                        </svg>
-                    </button>
-                </div>
-                <div className="p-6 space-y-6">
-                    {isGameStarted && (
-                        <div className="bg-red-100 border border-red-200 text-red-700 px-4 py-3 rounded-lg text-sm font-semibold text-center">
-                            You cannot book tickets now. Please wait for the next round.
-                        </div>
-                    )}
-                     <div className="flex items-center justify-center gap-4 text-xs font-bold uppercase tracking-wider text-slate-600 pb-2 border-b">
-                        <div className="flex items-center gap-2"><div className="w-4 h-4 bg-green-500 rounded-sm border border-green-600"></div><span>Available</span></div>
-                        <div className="flex items-center gap-2"><div className="w-4 h-4 bg-red-500 rounded-sm border border-red-600"></div><span>Booked</span></div>
-                        <div className="flex items-center gap-2"><div className="w-4 h-4 bg-blue-500 rounded-sm border border-blue-600"></div><span>Selected</span></div>
-                    </div>
-                    <div className="grid grid-cols-5 sm:grid-cols-8 lg:grid-cols-10 gap-2 max-h-[50vh] overflow-y-auto custom-scrollbar p-2 bg-slate-100 rounded-lg border">
-                        {activeTickets.map(ticket => {
-                            const isBooked = ticket.owner !== null;
-                            const isSelected = selectedTicketIds.includes(ticket.id);
-
-                            let buttonClass = 'bg-green-500 border-green-700 text-white'; // Available
-                            if (isBooked) buttonClass = 'bg-red-500 border-red-700 text-white cursor-not-allowed';
-                            else if (isSelected) buttonClass = 'bg-blue-500 border-blue-700 text-white ring-2 ring-offset-1 ring-blue-500';
-                            else if (!isGameStarted) buttonClass += ' hover:bg-green-600';
-
-                            if(isGameStarted && !isBooked) buttonClass = 'bg-green-200 border-green-300 text-green-600 cursor-not-allowed';
-                            
-                            return (
-                                <button
-                                    key={ticket.id}
-                                    onClick={() => handleTicketClick(ticket.id)}
-                                    disabled={isBooked || isGameStarted}
-                                    title={isBooked ? `Booked by: ${ticket.owner}` : isSelected ? 'Selected' : 'Available'}
-                                    className={`
-                                        aspect-square flex flex-col items-center justify-center rounded-md font-black
-                                        border shadow-sm transition-all duration-200 p-1 text-center
-                                        ${buttonClass}
-                                    `}
-                                >
-                                    <span className="text-base">{ticket.id}</span>
-                                     {isBooked && (
-                                        <span className="text-[8px] leading-tight font-semibold truncate w-full text-center text-red-100 mt-0.5">
-                                            {ticket.owner}
-                                        </span>
-                                    )}
-                                </button>
-                            );
-                        })}
-                    </div>
-                     <div className="space-y-4 pt-4 border-t">
-                        <div>
-                            <label className="text-xs font-semibold text-slate-500 uppercase">Your Name</label>
-                            <input
-                                type="text"
-                                value={bookingName}
-                                onChange={e => setBookingName(e.target.value)}
-                                placeholder="Enter Name for Booking"
-                                disabled={isGameStarted}
-                                className="w-full mt-1 p-3 bg-white border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none transition disabled:bg-slate-200 disabled:cursor-not-allowed"
-                            />
-                        </div>
-                        <div className="flex justify-between items-center">
-                            <p className="text-sm font-bold text-slate-700">Selected: {selectedTicketIds.length}</p>
-                            <button
-                                onClick={handleBookOnWhatsApp}
-                                disabled={isGameStarted || !bookingName.trim() || selectedTicketIds.length === 0}
-                                className="bg-green-500 hover:bg-green-600 text-white font-bold py-3 px-6 rounded-lg shadow-lg transition-all active:scale-95 disabled:bg-slate-300 disabled:cursor-not-allowed"
-                            >
-                                Book on WhatsApp
-                            </button>
-                        </div>
-                    </div>
-                </div>
-            </div>
-        </div>,
-        document.body
-    );
-};
-
-const SingleTicketBookingModal: FC<{
-    ticket: Ticket | null;
-    onClose: () => void;
-}> = ({ ticket, onClose }) => {
-    const [name, setName] = useState('');
-
-    useEffect(() => {
-        if (ticket) {
-            setName(''); // Reset name when a new ticket is selected
-        }
-    }, [ticket]);
-
-    if (!ticket) return null;
-
-    const handleBook = () => {
-        if (!name.trim()) {
-            alert('Please enter a name.');
-            return;
-        }
-        const text = `Hi, I'd like to book Housie ticket number: ${ticket.id} for the name: ${name}.`;
-        window.open(`https://wa.me/${SUPPORT_PHONE}?text=${encodeURIComponent(text)}`, '_blank');
-        onClose();
-    };
-
-    return createPortal(
-        <div className="fixed inset-0 z-[200] flex items-center justify-center bg-black/60 backdrop-blur-sm p-4 animate-pop">
-            <div className="bg-white rounded-2xl w-full max-w-sm shadow-2xl overflow-hidden">
-                <div className="p-6 border-b">
-                    <h2 className="text-xl font-bold text-blue-800">Book Ticket No. {ticket.id}</h2>
-                </div>
-                <div className="p-6 space-y-4">
-                    <div>
-                        <label htmlFor="booking-name" className="text-sm font-semibold text-slate-600">Enter Your Name</label>
-                        <input
-                            id="booking-name"
-                            type="text"
-                            value={name}
-                            onChange={e => setName(e.target.value)}
-                            placeholder="Enter Name for Booking"
-                            className="w-full mt-2 p-3 bg-slate-50 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none transition"
-                        />
-                    </div>
-                    <div className="flex gap-4 pt-2">
-                        <button
-                            onClick={onClose}
-                            className="flex-1 bg-slate-200 hover:bg-slate-300 text-slate-700 font-bold py-3 rounded-lg transition-all active:scale-95"
-                        >
-                            Cancel
-                        </button>
-                        <button
-                            onClick={handleBook}
-                            disabled={!name.trim()}
-                            className="flex-1 bg-green-500 hover:bg-green-600 text-white font-bold py-3 rounded-lg shadow-lg transition-all active:scale-95 disabled:bg-slate-300 disabled:cursor-not-allowed"
-                        >
-                            Book Now
-                        </button>
-                    </div>
-                </div>
-            </div>
-        </div>,
-        document.body
-    );
-};
-
-const ViewTicketModal: FC<{
-    isOpen: boolean;
-    onClose: () => void;
-    ticket: Ticket | null;
-    calledNumbers: number[] | null;
-}> = ({ isOpen, onClose, ticket, calledNumbers }) => {
-    if (!isOpen || !ticket || !calledNumbers) return null;
-
-    return createPortal(
-        <div className="fixed inset-0 z-[300] flex items-center justify-center bg-black/80 backdrop-blur-md p-4 animate-pop">
-            <div className="bg-slate-100 rounded-2xl w-full max-w-md shadow-2xl overflow-hidden relative p-4">
-                 <button onClick={onClose} className="absolute top-2 right-2 text-slate-400 hover:text-slate-700 transition-colors z-10">
-                    <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-                    </svg>
-                </button>
-                <HousieTicket ticket={ticket} calledNumbers={calledNumbers} />
-            </div>
-        </div>, document.body
-    );
-};
-
-const HousieGameOverModal: FC<{
-    isOpen: boolean;
-    onClose: () => void;
-    gameState: GameState | null;
-    onViewTicket: (ticket: Ticket) => void;
-    onResetRequest: () => void;
-}> = ({ isOpen, onClose, gameState, onViewTicket, onResetRequest }) => {
-    const [password, setPassword] = useState('');
-
-    if (!isOpen || !gameState) return null;
-
-    const handleReset = () => {
-        if(password === (process.env.RESET_PASSWORD || 'admin')) {
-            onResetRequest();
-            setPassword('');
-        } else {
-            alert('Incorrect password!');
-        }
-    };
-
-    return createPortal(
-        <div className="fixed inset-0 z-[200] flex items-center justify-center bg-black/80 backdrop-blur-md p-4">
-            <div className="bg-white rounded-[2.5rem] w-full max-w-lg text-center overflow-hidden shadow-2xl animate-pop border-8 border-white/10 p-8 relative">
-                <h2 className="text-4xl font-black text-gray-800">Game Over!</h2>
-                <p className="text-lg text-gray-600 mt-2">Congratulations to all the winners!</p>
-
-                <div className="mt-6 w-full text-left max-h-60 overflow-y-auto custom-scrollbar pr-2">
-                    <h3 className="font-bold text-gray-700 mb-2 text-center uppercase tracking-wider">Winners Board</h3>
-                    <ul className="space-y-2">
-                        {WINNING_PATTERNS
-                            .filter(p => (gameState.prizesConfig[p.key]?.count ?? 0) > 0)
-                            .map(pattern => {
-                                const winners = gameState.winners[pattern.key] || [];
-                                return (
-                                    <li key={pattern.key} className="bg-gray-50 p-3 rounded-lg border">
-                                        <p className="font-bold text-sm text-blue-700">{pattern.label}</p>
-                                        {winners.length > 0 ? (
-                                            winners.map(w => (
-                                                <div key={w.id} className="text-xs text-gray-600 flex justify-between items-center mt-1">
-                                                    <span>Winner: <span className="font-semibold">{w.owner}</span> (Ticket #{w.id})</span>
-                                                    <button onClick={() => onViewTicket(w)} className="text-blue-500 hover:underline text-[10px] font-bold">View</button>
-                                                </div>
-                                            ))
-                                        ) : (
-                                            <p className="text-xs text-gray-400 italic">No winner for this prize.</p>
-                                        )}
-                                    </li>
-                                )
-                        })}
-                    </ul>
-                </div>
-
-                <div className="mt-8 border-t pt-6">
-                    <button
-                        className="w-full bg-gray-200 hover:bg-gray-300 text-gray-800 font-bold py-3 rounded-lg shadow-sm transition-all active:scale-95 mb-4"
-                        onClick={onClose}
-                    >
-                        View my Dashboard
-                    </button>
-                    <div className="flex gap-2 justify-center">
-                        <input
-                            type="password"
-                            value={password}
-                            onChange={e => setPassword(e.target.value)}
-                            placeholder="Admin Password to Reset"
-                            className="flex-1 bg-gray-100 text-gray-800 placeholder-gray-400 rounded-lg px-4 py-2 border-2 border-gray-300 outline-none focus:border-blue-500 transition-all shadow-inner"
-                        />
-                        <button
-                            onClick={handleReset}
-                            disabled={!password}
-                            className="bg-red-600 hover:bg-red-700 text-white font-bold py-2 px-6 rounded-lg shadow-lg transition-all active:scale-95 disabled:bg-gray-400 disabled:cursor-not-allowed"
-                        >
-                            Reset Game
-                        </button>
-                    </div>
-                </div>
-            </div>
-        </div>, document.body
     );
 };
 
@@ -2325,17 +1379,9 @@ const App: FC = () => {
     const [currentGame, setCurrentGame] = useState<GameCategory | null>(null);
     const [isSupportOpen, setIsSupportOpen] = useState(false);
     const [menuOpen, setMenuOpen] = useState(false);
-    const [isTicketSelectorOpen, setIsTicketSelectorOpen] = useState(false);
-    const [bookingTicket, setBookingTicket] = useState<Ticket | null>(null);
-    const [viewingTicketDetails, setViewingTicketDetails] = useState<{ticket: Ticket, calledNumbers: number[]}|null>(null);
     const [isTablesModalOpen, setIsTablesModalOpen] = useState(false);
     const [sessionTimeLeft, setSessionTimeLeft] = useState<number | null>(null);
     
-    // Housie Game State
-    const [housieGameState, setHousieGameState] = useState<GameState | null>(null);
-    const [isGameOverModalOpen, setIsGameOverModalOpen] = useState(true);
-    const [scheduleDisplay, setScheduleDisplay] = useState('');
-
     // Teen Patti Admin state
     const [tpGameIds, setTPGameIds] = useState<Record<number, string[]>>({});
     const [tpPlayerConfigs, setTPPlayerConfigs] = useState<AllPlayerConfigs>({});
@@ -2432,10 +1478,7 @@ const App: FC = () => {
     };
 
     useEffect(() => {
-        if (currentGame === 'housie') {
-            const unsub = api.subscribe(setHousieGameState);
-            return unsub;
-        } else {
+        if (currentGame !== 'teenpatti') {
             // Cleanup Firebase listener when switching away from Teen Patti
             if(firebaseListener.current) {
                 firebaseListener.current();
@@ -2444,55 +1487,6 @@ const App: FC = () => {
             }
         }
     }, [currentGame]);
-    
-    useEffect(() => {
-        let timeout: ReturnType<typeof setTimeout>;
-        if (currentGame === 'housie' && housieGameState?.scheduledStartTime) {
-            const startTime = new Date(housieGameState.scheduledStartTime).getTime();
-            const now = Date.now();
-            if (startTime > now && (housieGameState.calledNumbers?.length ?? 0) === 0) {
-                timeout = setTimeout(() => {
-                    api.callNumber();
-                    api.updateSettings({ isAutoPlaying: true });
-                }, startTime - now);
-            }
-        }
-        return () => clearTimeout(timeout);
-    }, [currentGame, housieGameState?.scheduledStartTime, housieGameState?.calledNumbers.length]);
-    
-    useEffect(() => {
-        let interval: ReturnType<typeof setInterval> | undefined;
-
-        const updateDisplay = () => {
-            if (!housieGameState?.scheduledStartTime) {
-                setScheduleDisplay('');
-                return;
-            }
-            const startTime = new Date(housieGameState.scheduledStartTime).getTime();
-            const now = Date.now();
-
-            if (now > startTime) {
-                setScheduleDisplay('');
-                clearInterval(interval);
-                return;
-            }
-            
-            const formattedTime = new Date(startTime).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: true });
-            setScheduleDisplay(`GAME STARTS AT ${formattedTime}`);
-        };
-
-        updateDisplay();
-        interval = setInterval(updateDisplay, 1000 * 30); // Update every 30 seconds
-
-        return () => clearInterval(interval);
-    }, [housieGameState?.scheduledStartTime]);
-
-    useEffect(() => {
-        // When a new game starts (isGameOver becomes false), we should be ready to show the modal again.
-        if (!housieGameState?.isGameOver) {
-            setIsGameOverModalOpen(true);
-        }
-    }, [housieGameState?.isGameOver]);
 
     // TP Game State
     const [tpState, setTpState] = useState({
@@ -3104,18 +2098,7 @@ const App: FC = () => {
                             onGameChange={(g) => { setCurrentGame(g); setMenuOpen(false); }}
                             onLogout={currentGame === 'teenpatti' && tpState.gamePhase !== 'id_entry' ? handleLeaveGame : undefined}
                             centerContent={
-                                currentGame === 'housie' ? (
-                                    <div className="flex flex-col items-center gap-1">
-                                        <button onClick={() => setIsTicketSelectorOpen(true)} className="bg-yellow-400 hover:bg-yellow-300 text-[#1e3a8a] font-black px-4 py-1.5 rounded-full shadow-lg uppercase text-[10px] tracking-wider transform transition hover:scale-105 active:scale-95 border-2 border-yellow-200">
-                                            Available Tickets
-                                        </button>
-                                        {scheduleDisplay && (
-                                            <div className="text-yellow-300 text-[10px] font-bold bg-black/50 px-2 py-0.5 rounded-full">
-                                                {scheduleDisplay}
-                                            </div>
-                                        )}
-                                    </div>
-                                ) : currentGame === 'teenpatti' && tpState.gamePhase !== 'id_entry' ? (
+                                currentGame === 'teenpatti' && tpState.gamePhase !== 'id_entry' ? (
                                     renderTPHeaderContent()
                                 ) : currentGame === 'teenpatti' ? (
                                     <button onClick={() => setIsTablesModalOpen(true)} className="bg-yellow-400 hover:bg-yellow-300 text-blue-900 font-black px-6 py-2 rounded-full shadow-lg uppercase text-xs tracking-wider transform transition hover:scale-105 active:scale-95 border-2 border-yellow-200">
@@ -3125,7 +2108,6 @@ const App: FC = () => {
                             }
                         />
                         <div className="flex-1 relative overflow-hidden">
-                            {currentGame === 'housie' && <HousieGame gameState={housieGameState} onBookTicket={setBookingTicket} />}
                             {currentGame === 'teenpatti' && (
                                 <TeenPattiGame 
                                     {...tpState}
@@ -3149,10 +2131,6 @@ const App: FC = () => {
                 <SettingsModal 
                     isOpen={isSupportOpen}
                     onClose={() => setIsSupportOpen(false)}
-                    housieGameState={housieGameState}
-                    onUpdateHousieSettings={(settings) => api.updateSettings(settings)}
-                    onResetHousieGame={() => api.resetGame()}
-                    onCallNextHousieNumber={() => api.callNumber()}
                     tpGameIds={tpGameIds}
                     onRegenerateTPIds={handleRegenerateTPIds}
                     tpPlayerConfigs={tpPlayerConfigs}
@@ -3167,25 +2145,6 @@ const App: FC = () => {
                     bookedTables={tpBookedTables}
                     playerConfigs={tpPlayerConfigs}
                     gameIds={tpGameIds}
-                />
-                 <AvailableTicketsModal 
-                    isOpen={isTicketSelectorOpen && currentGame === 'housie'}
-                    onClose={() => setIsTicketSelectorOpen(false)}
-                    gameState={housieGameState}
-                />
-                <SingleTicketBookingModal ticket={bookingTicket} onClose={() => setBookingTicket(null)} />
-                <HousieGameOverModal
-                    isOpen={(housieGameState?.isGameOver ?? false) && isGameOverModalOpen}
-                    onClose={() => setIsGameOverModalOpen(false)}
-                    gameState={housieGameState}
-                    onResetRequest={() => api.resetGame()}
-                    onViewTicket={(ticket) => setViewingTicketDetails({ ticket, calledNumbers: housieGameState?.calledNumbers || [] })}
-                />
-                <ViewTicketModal 
-                    isOpen={!!viewingTicketDetails}
-                    onClose={() => setViewingTicketDetails(null)}
-                    ticket={viewingTicketDetails?.ticket ?? null}
-                    calledNumbers={viewingTicketDetails?.calledNumbers ?? null}
                 />
             </div>
         </ErrorBoundary>
