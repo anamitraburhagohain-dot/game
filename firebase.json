@@ -1,0 +1,17 @@
+// firebase.json
+{
+  "hosting": {
+    "public": "dist", // Change this line
+    "ignore": [
+      "firebase.json",
+      "**/.*",
+      "**/node_modules/**"
+    ],
+    "rewrites": [
+      {
+        "source": "**",
+        "destination": "/index.html"
+      }
+    ]
+  }
+}
