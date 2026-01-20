@@ -326,7 +326,11 @@ export const api = {
                     val.prizesConfig = sanitizePrizeConfig(val.prizesConfig);
                     callback(val);
                 } else {
-                    callback(null);
+                    // If no game state exists in Firebase, create one.
+                    console.log("No Housie game state found. Initializing a new game...");
+                    api.resetGame();
+                    // The onValue listener will be triggered again once the data is set,
+                    // which will then call the callback with the new state.
                 }
             });
             return unsub;
