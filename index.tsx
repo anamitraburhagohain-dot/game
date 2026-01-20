@@ -248,20 +248,20 @@ const SettingsModal = ({
     // Housie Props
     housieGameState, onUpdateHousieSettings, onResetHousieGame, onCallNextHousieNumber,
     // Teen Patti Props
-    tpGameIds, onRegenerateTPIds, tpPlayerConfigs, tpBookedTables, tpTableTimers, onSaveTPSettings
+    tpGameIds, onRegenerateTPIds, tpPlayerConfigs, tpBookedTables, tpTableTimers, onSaveTPSettingsAsync
 }: { 
     isOpen: boolean, 
     onClose: () => void,
     housieGameState: GameState | null,
-    onUpdateHousieSettings: (settings: Partial<GameState>) => void,
+    onUpdateHousieSettings: (settings: Partial<GameState>) => Promise<void>,
     onResetHousieGame: () => Promise<void>,
     onCallNextHousieNumber: () => void,
     tpGameIds: Record<number, string[]>,
-    onRegenerateTPIds: (boot: number) => void,
+    onRegenerateTPIds: (boot: number) => Promise<void>,
     tpPlayerConfigs: AllPlayerConfigs,
     tpBookedTables: Record<number, boolean>,
     tpTableTimers: Record<number, number>,
-    onSaveTPSettings: (settings: { configs: AllPlayerConfigs, booked: Record<number, boolean>, timers: Record<number, number> }) => void
+    onSaveTPSettingsAsync: (settings: { configs: AllPlayerConfigs, booked: Record<number, boolean>, timers: Record<number, number> }) => Promise<void>
 }) => {
     const [query, setQuery] = useState('');
     const [isAdmin, setIsAdmin] = useState(false);
@@ -315,21 +315,21 @@ const SettingsModal = ({
         onClose(); setQuery('');
     };
 
-    const handleBookTickets = () => {
+    const handleBookTickets = async () => {
         if (!housieGameState) return;
         if (!bookName.trim() || !bookTicketNumbers.trim()) {
             alert("Please provide both player name and ticket IDs to book.");
             return;
         }
         
-        const newTickets = JSON.parse(JSON.stringify(housieGameState.extraTickets));
+        const newTickets = structuredClone(housieGameState.extraTickets);
         const ticketIdsToBook = bookTicketNumbers.split(',').map(id => parseInt(id.trim())).filter(id => !isNaN(id) && id > 0);
         
         const booked = [];
         const alreadyOwned = [];
         
         for(const ticketId of ticketIdsToBook) {
-            const ticket = newTickets.find((t: Ticket) => t.id === ticketId);
+            const ticket = newTickets.find((t) => t.id === ticketId);
             if (ticket) {
                 if (ticket.owner === null) {
                     ticket.owner = bookName.trim();
@@ -340,23 +340,28 @@ const SettingsModal = ({
             }
         }
         
-        onUpdateHousieSettings({ extraTickets: newTickets });
-        
-        if (booked.length > 0) alert(`Booked tickets: ${booked.join(', ')} for ${bookName.trim()}`);
-        if (alreadyOwned.length > 0) alert(`Could not book tickets ${alreadyOwned.join(', ')} as they are already owned by others.`);
-        
-        setBookName('');
-        setBookTicketNumbers('');
+        try {
+            await onUpdateHousieSettings({ extraTickets: newTickets });
+            let message = '';
+            if (booked.length > 0) message += `Booked tickets: ${booked.join(', ')} for ${bookName.trim()}\n`;
+            if (alreadyOwned.length > 0) message += `Could not book tickets ${alreadyOwned.join(', ')} as they are already owned.`;
+            if (message) alert(message.trim());
+            setBookName('');
+            setBookTicketNumbers('');
+        } catch (error) {
+            console.error("Error booking tickets:", error);
+            alert("Failed to book tickets. Please check your Firebase Database rules to ensure you have write permissions.");
+        }
     };
 
-    const handleUnbookTickets = () => {
+    const handleUnbookTickets = async () => {
         if (!housieGameState) return;
         if (!unbookName.trim() && !unbookTicketNumbers.trim()) {
             alert("Please provide either ticket IDs or a player name to unbook.");
             return;
         }
     
-        const newTickets = JSON.parse(JSON.stringify(housieGameState.extraTickets));
+        const newTickets = structuredClone(housieGameState.extraTickets);
         const ticketIdsToUnbook = unbookTicketNumbers.split(',').map(id => parseInt(id.trim())).filter(id => !isNaN(id) && id > 0);
     
         let unbookedCount = 0;
@@ -364,7 +369,7 @@ const SettingsModal = ({
         // Unbooking by numbers
         if (ticketIdsToUnbook.length > 0) {
             for (const ticketId of ticketIdsToUnbook) {
-                const ticket = newTickets.find((t: Ticket) => t.id === ticketId);
+                const ticket = newTickets.find((t) => t.id === ticketId);
                 if (ticket && ticket.owner) {
                     ticket.owner = null;
                     unbookedCount++;
@@ -377,37 +382,49 @@ const SettingsModal = ({
             for(const ticket of newTickets) {
                 if (ticket.owner === unbookName.trim()) {
                     ticket.owner = null;
-                    unbookedCount++;
+                    if (!ticketIdsToUnbook.includes(ticket.id)) unbookedCount++;
                 }
             }
         }
     
-        onUpdateHousieSettings({ extraTickets: newTickets });
-    
-        if (unbookedCount > 0) alert(`Unbooked ${unbookedCount} tickets.`);
-        
-        setUnbookName('');
-        setUnbookTicketNumbers('');
+        try {
+            await onUpdateHousieSettings({ extraTickets: newTickets });
+            if (unbookedCount > 0) {
+                alert(`Successfully unbooked ${unbookedCount} ticket(s).`);
+            } else {
+                alert("No matching tickets found to unbook.");
+            }
+            setUnbookName('');
+            setUnbookTicketNumbers('');
+        } catch (error) {
+            console.error("Error unbooking tickets:", error);
+            alert("Failed to unbook tickets. Please check your Firebase Database rules to ensure you have write permissions.");
+        }
     };
     
-    const handleHousieSave = () => {
+    const handleHousieSave = async () => {
         if (!housieGameState) return;
-
-        const updates: Partial<GameState> = {
-            prizesConfig: localPrizes,
-            activeTicketLimit: localTicketLimit,
-            scheduledStartTime: localScheduledTime
-        };
-        onUpdateHousieSettings(updates);
-        onClose();
+        try {
+            await onUpdateHousieSettings({
+                prizesConfig: localPrizes,
+                activeTicketLimit: localTicketLimit,
+                scheduledStartTime: localScheduledTime
+            });
+            alert("Housie settings saved successfully.");
+            onClose();
+        } catch (error) {
+            console.error("Error saving Housie settings:", error);
+            alert("Failed to save Housie settings. Please check your Firebase Database rules to ensure you have write permissions.");
+        }
     };
 
-    const handleTPSave = () => {
-        onSaveTPSettings({
+    const handleTPSave = async () => {
+        await onSaveTPSettingsAsync({
             configs: localTPPlayerConfigs,
             booked: localTPBookedTables,
             timers: localTPTableTimers
         });
+        // Feedback is handled in the passed function
         onClose();
     };
     
@@ -460,9 +477,15 @@ const SettingsModal = ({
                                 <span className="text-xs font-bold text-red-700">Are you sure?</span>
                                 <button
                                     onClick={async () => {
-                                        await onResetHousieGame();
-                                        setIsConfirmingReset(false);
-                                        onClose();
+                                        try {
+                                            await onResetHousieGame();
+                                            alert("Housie game has been reset successfully.");
+                                            setIsConfirmingReset(false);
+                                            onClose();
+                                        } catch (error) {
+                                            console.error("Failed to reset Housie game:", error);
+                                            alert("Failed to reset game. Please check your Firebase Database rules to ensure you have write permissions.");
+                                        }
                                     }}
                                     className="px-3 py-1 rounded-md text-xs font-bold border shadow-sm active:scale-95 bg-red-600 hover:bg-red-700 text-white border-red-700"
                                 >
@@ -1025,7 +1048,7 @@ const HousieGame: FC<{ gameState: GameState | null, onBookTicket: (ticket: Ticke
     }, [gameState?.isAutoPlaying, gameState?.isGameOver]);
     
     const filteredTickets = useMemo(() => {
-        if (!gameState) {
+        if (!gameState?.extraTickets) {
             return [];
         }
 
@@ -1049,11 +1072,12 @@ const HousieGame: FC<{ gameState: GameState | null, onBookTicket: (ticket: Ticke
         }
     }, [gameState, ticketFilter]);
 
-    if (!gameState) {
+    if (!gameState || !Array.isArray(gameState.calledNumbers) || !Array.isArray(gameState.extraTickets)) {
         return (
             <div className="w-full h-full flex flex-col items-center justify-center bg-slate-900 text-white">
                 <div className="w-12 h-12 border-4 border-blue-500 border-t-transparent rounded-full animate-spin mb-4"></div>
                 <h2 className="text-xl font-black uppercase tracking-widest animate-pulse">Loading Game...</h2>
+                <p className="text-sm text-slate-400 mt-2">If this persists, the database may be empty or inaccessible.</p>
             </div>
         );
     }
@@ -2367,24 +2391,44 @@ const App: FC = () => {
 
     }, []);
 
-    const handleSaveTPSettings = (settings: { configs: AllPlayerConfigs, booked: Record<number, boolean>, timers: Record<number, number> }) => {
-        if (!isFirebaseConfigured) return;
-        const adminConfigRef = ref(db, 'teenpatti/adminConfig');
-        update(adminConfigRef, {
-            playerConfigs: settings.configs,
-            bookedTables: settings.booked,
-            tableTimers: settings.timers
-        });
+    const handleSaveTPSettings = async (settings: { configs: AllPlayerConfigs, booked: Record<number, boolean>, timers: Record<number, number> }) => {
+        if (!isFirebaseConfigured) {
+            alert("Cannot save settings. Firebase is not configured.");
+            return;
+        }
+        try {
+            const adminConfigRef = ref(db, 'teenpatti/adminConfig');
+            await update(adminConfigRef, {
+                playerConfigs: settings.configs,
+                bookedTables: settings.booked,
+                tableTimers: settings.timers
+            });
+            alert("Teen Patti settings saved successfully!");
+        } catch (error) {
+            console.error("Error saving Teen Patti settings:", error);
+            alert("Failed to save Teen Patti settings. Please check your Firebase Database rules and ensure you have write permissions.");
+        }
     };
 
-    const handleRegenerateTPIds = (boot: number) => {
-        if (!isFirebaseConfigured) return;
-        const newIds = Array.from({ length: 4 }, generateGameId);
-        const updates: any = {};
-        updates[`teenpatti/adminConfig/gameIds/${boot}`] = newIds;
-        // Also clear player configs for this boot table
-        updates[`teenpatti/adminConfig/playerConfigs/${boot}`] = null;
-        update(ref(db), updates);
+    const handleRegenerateTPIds = async (boot: number) => {
+        if (!isFirebaseConfigured) {
+            alert("Cannot regenerate IDs. Firebase is not configured.");
+            return;
+        }
+        if (!confirm(`Are you sure you want to regenerate all Unique IDs for the ₹${boot} table? This will also clear any player names and chip counts for this table.`)) {
+            return;
+        }
+        try {
+            const newIds = Array.from({ length: 4 }, generateGameId);
+            const updates: any = {};
+            updates[`teenpatti/adminConfig/gameIds/${boot}`] = newIds;
+            updates[`teenpatti/adminConfig/playerConfigs/${boot}`] = null; // Clear configs for the old IDs
+            await update(ref(db), updates);
+            alert(`Successfully regenerated IDs for the ₹${boot} table.`);
+        } catch (error) {
+            console.error("Error regenerating Teen Patti IDs:", error);
+            alert(`Failed to regenerate IDs for the ₹${boot} table. Please check your Firebase Database rules and ensure you have write permissions.`);
+        }
     };
 
     useEffect(() => {
@@ -3114,7 +3158,7 @@ const App: FC = () => {
                     tpPlayerConfigs={tpPlayerConfigs}
                     tpBookedTables={tpBookedTables}
                     tpTableTimers={tpTableTimers}
-                    onSaveTPSettings={handleSaveTPSettings}
+                    onSaveTPSettingsAsync={handleSaveTPSettings}
                 />
                 <TPAvailableTablesModal
                     isOpen={isTablesModalOpen}

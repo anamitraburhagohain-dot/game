@@ -322,15 +322,22 @@ export const api = {
             const unsub = onValue(gameRef, (snapshot) => {
                 const val = snapshot.val();
                 if (val) {
+                    // Defensively ensure essential arrays and objects exist to prevent render crashes from partial data
+                    if (!val.calledNumbers) val.calledNumbers = [];
+                    if (!val.extraTickets) val.extraTickets = [];
+                    if (!val.shuffledQueue) val.shuffledQueue = [];
+                    if (!val.winners) val.winners = {};
+                    if (!val.prizesConfig) val.prizesConfig = {};
+
                     val.winners = sanitizeWinners(val.winners);
                     val.prizesConfig = sanitizePrizeConfig(val.prizesConfig);
                     callback(val);
                 } else {
                     // If no game state exists in Firebase, create one.
                     console.log("No Housie game state found. Initializing a new game...");
-                    api.resetGame();
-                    // The onValue listener will be triggered again once the data is set,
-                    // which will then call the callback with the new state.
+                    api.resetGame().catch(error => {
+                        console.error("Failed to initialize game state:", error);
+                    });
                 }
             });
             return unsub;
@@ -475,7 +482,7 @@ export const api = {
             mockState = freshState;
             notifyMockListeners();
         } else {
-            if (!db) return;
+            if (!db) return Promise.reject(new Error("Firebase is not initialized."));
             // For Firebase, completely overwrite the gameState with the fresh state.
             await set(ref(db, 'housie/gameState'), freshState);
         }
@@ -492,7 +499,7 @@ export const api = {
                 notifyMockListeners();
             }
         } else {
-            if (!db) return;
+            if (!db) return Promise.reject(new Error("Firebase is not initialized."));
             await update(ref(db, 'housie/gameState'), settings);
         }
     }
