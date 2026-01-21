@@ -286,7 +286,7 @@ const SettingsModal = ({
         if (isOpen) {
             // housie
             if (housieGameState) {
-                setLocalPrizes(JSON.parse(JSON.stringify(housieGameState.prizesConfig)));
+                setLocalPrizes(JSON.parse(JSON.stringify(housieGameState.prizesConfig || {})));
                 setLocalTicketLimit(housieGameState.activeTicketLimit);
                 setLocalScheduledTime(housieGameState.scheduledStartTime || '');
             }
@@ -757,11 +757,9 @@ const GameHeader = ({
 // Error Boundary
 interface ErrorBoundaryProps { children?: ReactNode; }
 interface ErrorBoundaryState { hasError: boolean; error: string; }
+// FIX: Explicitly extend React.Component to resolve TypeScript errors where `this.setState` and `this.props` were not found.
 class ErrorBoundary extends React.Component<ErrorBoundaryProps, ErrorBoundaryState> {
-    constructor(props: ErrorBoundaryProps) {
-        super(props);
-        this.state = { hasError: false, error: "" };
-    }
+    public state: ErrorBoundaryState = { hasError: false, error: "" };
     
     static getDerivedStateFromError(error: Error): Partial<ErrorBoundaryState> { 
         const errorMessage = error instanceof Error ? error.message : String(error);
@@ -777,7 +775,7 @@ class ErrorBoundary extends React.Component<ErrorBoundaryProps, ErrorBoundarySta
     render() {
         if (this.state.hasError) {
             return (
-                <div className="w-screen h-screen bg-red-100 text-red-800 flex flex-col items-center justify-center p-4">
+                <div className="w-screen h-screen bg-red-100 text-red-800 flex flex-col items-center justify-center p-4 z-[9999] relative">
                     <h1 className="text-2xl font-black">Oops! Something went wrong.</h1>
                     <p className="mt-2 text-center">An unexpected error occurred. Please try refreshing the page.</p>
                     <pre className="mt-4 p-4 bg-red-200 rounded-md text-xs w-full max-w-2xl overflow-auto whitespace-pre-wrap">{this.state.error}</pre>
@@ -886,7 +884,7 @@ const HousieBoard: FC<{ calledNumbers: number[], currentNumber: number | null }>
                     <span className="text-[20rem] font-black text-white opacity-5 -rotate-12 select-none">SG</span>
                 </div>
                 {Array.from({ length: 90 }, (_, i) => i + 1).map(num => {
-                    const isCalled = calledNumbers.includes(num);
+                    const isCalled = calledNumbers ? calledNumbers.includes(num) : false;
                     const isCurrent = num === currentNumber;
                     return (
                         <div 
@@ -909,6 +907,8 @@ const HousieBoard: FC<{ calledNumbers: number[], currentNumber: number | null }>
 
 const HousieTicket: FC<{ ticket: Ticket, calledNumbers: number[], onBookTicket?: (ticket: Ticket) => void }> = ({ ticket, calledNumbers, onBookTicket }) => {
     const isBooked = ticket.owner !== null;
+    // CRITICAL FIX: Ensure ticket.grid exists before rendering to prevent white screen crash
+    if (!ticket || !ticket.grid) return null; 
 
     return (
         <div className="bg-pink-50 rounded-lg shadow-md w-full overflow-hidden mb-4 border-4 border-double border-gray-300">
@@ -929,7 +929,7 @@ const HousieTicket: FC<{ ticket: Ticket, calledNumbers: number[], onBookTicket?:
                     {ticket.grid.map((row, rIdx) => (
                         <div key={rIdx} className="grid grid-cols-9">
                             {row.map((cell, cIdx) => {
-                                const isMarked = cell !== null && calledNumbers.includes(cell);
+                                const isMarked = cell !== null && Array.isArray(calledNumbers) && calledNumbers.includes(cell);
                                 return (
                                     <div
                                         key={cIdx}
@@ -1048,7 +1048,7 @@ const HousieGame: FC<{ gameState: GameState | null, onBookTicket: (ticket: Ticke
     }, [gameState?.isAutoPlaying, gameState?.isGameOver]);
     
     const filteredTickets = useMemo(() => {
-        if (!gameState?.extraTickets) {
+        if (!gameState?.extraTickets || !Array.isArray(gameState.extraTickets)) {
             return [];
         }
 
@@ -1177,10 +1177,10 @@ const HousieGame: FC<{ gameState: GameState | null, onBookTicket: (ticket: Ticke
                         </div>
                         <div className="space-y-2 p-4">
                             {WINNING_PATTERNS
-                                .filter(p => (gameState.prizesConfig[p.key]?.count ?? 1) > 0)
+                                .filter(p => (gameState.prizesConfig?.[p.key]?.count ?? 1) > 0)
                                 .map(pattern => {
-                                    const winners = gameState.winners[pattern.key] || [];
-                                    const prizeLimit = gameState.prizesConfig[pattern.key]?.count || 1;
+                                    const winners = gameState.winners?.[pattern.key] || [];
+                                    const prizeLimit = gameState.prizesConfig?.[pattern.key]?.count || 1;
                                     const isClosed = winners.length >= prizeLimit;
 
                                     return (
@@ -1273,12 +1273,12 @@ const TPPlayerSlot: FC<{ player?: Player; isActive: boolean; revealCards: boolea
 
     const isFolded = player.isFolded;
     const isMainPlayer = position === 'bottom';
-    const avatarSize = isMainPlayer ? 80 : 64; // w-20 = 80px, w-16 = 64px
+    const avatarSize = isMainPlayer ? 64 : 64; // Smaller profile for all
     
     const NameTag = (
-        <div className="bg-black/50 rounded-lg px-3 py-1 text-center shadow-lg relative">
-            <p className="font-bold text-sm text-white">{player.name}</p>
-            <p className="text-xs text-yellow-400">₹{player.chips}</p>
+        <div className="bg-black/50 rounded-lg px-2 py-1 text-center shadow-lg relative min-w-[80px]">
+            <p className="font-bold text-xs text-white truncate max-w-[100px]">{player.name}</p>
+            <p className="text-[10px] text-yellow-400">₹{player.chips}</p>
         </div>
     );
 
@@ -1288,11 +1288,11 @@ const TPPlayerSlot: FC<{ player?: Player; isActive: boolean; revealCards: boolea
                 <CircularTimer 
                     timeLeft={turnTimeLeft} 
                     maxTime={turnDuration} 
-                    size={avatarSize + 16} // Ring larger than avatar
-                    strokeWidth={6} 
+                    size={avatarSize + 12} // Ring slightly larger than avatar
+                    strokeWidth={4} 
                 />
             )}
-            <div className={`rounded-full border-4 bg-gray-900 overflow-hidden shadow-2xl transition-all duration-300 relative z-10 ${isMainPlayer ? 'w-20 h-20' : 'w-16 h-16'} ${isActive ? 'border-yellow-400 scale-105' : 'border-gray-600'}`}>
+            <div className={`rounded-full border-4 bg-gray-900 overflow-hidden shadow-2xl transition-all duration-300 relative z-10 ${isMainPlayer ? 'w-16 h-16' : 'w-16 h-16'} ${isActive ? 'border-yellow-400 scale-105' : 'border-gray-600'}`}>
                 <img src={`https://api.dicebear.com/9.x/avataaars/svg?seed=${player.avatarSeed}`} alt="avatar" className="w-full h-full object-cover" />
             </div>
             
@@ -1304,13 +1304,13 @@ const TPPlayerSlot: FC<{ player?: Player; isActive: boolean; revealCards: boolea
         </div>
     );
 
-    // Updated Cards Layout: Fanned style identical to main player but scaled for opponents
-    const Cards = player.cards ? (
-         <div className="relative h-24 w-32 mt-2">
+    // Opponent cards with wider fanning
+    const OpponentCards = player.cards ? (
+         <div className="relative h-20 w-32 mt-2">
             {player.cards.map((card, i) => (
                 <div key={card.id} className="absolute bottom-0 left-1/2 origin-bottom transition-transform duration-300" style={{
-                    // Identical fanned logic: Center X, Rotate based on index
-                    transform: `translateX(-50%) rotate(${(i - 1) * 15}deg)`,
+                    // Wider spread for opponents
+                    transform: `translateX(calc(-50% + ${(i - 1) * 20}px)) rotate(${(i - 1) * 25}deg)`,
                     zIndex: i
                 }}>
                     <PlayingCard 
@@ -1325,9 +1325,12 @@ const TPPlayerSlot: FC<{ player?: Player; isActive: boolean; revealCards: boolea
         </div>
     ) : null;
     
+    // Main player cards are rendered separately in the main component
+    const MainPlayerPlaceHolder = null;
+
     return (
-        <div className={`flex flex-col items-center gap-2 relative transition-all duration-300 ${isFolded ? 'opacity-50 grayscale' : ''}`}>
-            {position === 'bottom' ? (<>{Cards}{Avatar}{NameTag}</>) : (<>{NameTag}{Avatar}{Cards}</>)}
+        <div className={`flex flex-col items-center gap-1 relative transition-all duration-300 ${isFolded ? 'opacity-50 grayscale' : ''}`}>
+            {position === 'bottom' ? (<>{MainPlayerPlaceHolder}{Avatar}{NameTag}</>) : (<>{NameTag}{Avatar}{OpponentCards}</>)}
         </div>
     );
 };
@@ -1622,7 +1625,7 @@ const TeenPattiGame: FC<TeenPattiGameProps> = ({
     const [isGameOverDelayed, setIsGameOverDelayed] = useState(false);
 
     useEffect(() => {
-        let timer: NodeJS.Timeout;
+        let timer: ReturnType<typeof setTimeout>;
         // If the game is over and there is no side show result modal active,
         // then start the 5-second timer to show the game over modal.
         if (isGameOver && !sideShowResult) {
@@ -1805,7 +1808,8 @@ const TeenPattiGame: FC<TeenPattiGameProps> = ({
             
             {mainPlayer && (
                 <>
-                    <div className="absolute bottom-8 left-2 flex flex-col items-center gap-2">
+                    {/* Main player cards moved further left */}
+                    <div className="absolute bottom-4 left-0 pl-2 flex flex-col items-center gap-2">
                         {mainPlayer.cards && mainPlayer.cards.length > 0 && (
                             <div className="relative w-80 h-56 -mt-16">
                                 {mainPlayer.cards.map((card, i) => (
@@ -1817,11 +1821,12 @@ const TeenPattiGame: FC<TeenPattiGameProps> = ({
                         )}
                     </div>
             
-                    <div className="absolute bottom-8 right-8 flex flex-col items-end gap-4">
-                        <div className={`flex items-center gap-3 transition-all duration-300 ${mainPlayer.isFolded ? 'opacity-50 grayscale' : ''}`}>
-                            <div className="bg-black/50 rounded-lg px-4 py-2 text-right shadow-lg">
-                                <p className="font-bold text-md text-white">{mainPlayer.name}</p>
-                                <p className="text-sm text-yellow-400">₹{mainPlayer.chips}</p>
+                    {/* Action buttons and profile made smaller and adjusted position */}
+                    <div className="absolute bottom-4 right-2 flex flex-col items-end gap-2">
+                        <div className={`flex items-center gap-2 transition-all duration-300 ${mainPlayer.isFolded ? 'opacity-50 grayscale' : ''}`}>
+                            <div className="bg-black/50 rounded-lg px-3 py-1 text-right shadow-lg">
+                                <p className="font-bold text-sm text-white">{mainPlayer.name}</p>
+                                <p className="text-xs text-yellow-400">₹{mainPlayer.chips}</p>
                             </div>
                             <div className="relative">
                                 {/* Main Player Avatar with Timer */}
@@ -1829,18 +1834,18 @@ const TeenPattiGame: FC<TeenPattiGameProps> = ({
                                     <CircularTimer 
                                         timeLeft={turnTimeLeft} 
                                         maxTime={turnDuration} 
-                                        size={96} // 80px avatar + padding
-                                        strokeWidth={6} 
+                                        size={72} // Adjusted size
+                                        strokeWidth={4} 
                                     />
                                 )}
-                                <div className={`w-20 h-20 rounded-full border-4 bg-gray-900 overflow-hidden shadow-2xl transition-all duration-300 relative z-10 ${isMyTurn && gamePhase === 'betting' ? 'border-yellow-400 scale-105' : 'border-gray-600'}`}>
+                                <div className={`w-16 h-16 rounded-full border-4 bg-gray-900 overflow-hidden shadow-2xl transition-all duration-300 relative z-10 ${isMyTurn && gamePhase === 'betting' ? 'border-yellow-400 scale-105' : 'border-gray-600'}`}>
                                     <img src={`https://api.dicebear.com/9.x/avataaars/svg?seed=${mainPlayer.avatarSeed}`} alt="avatar" className="w-full h-full object-cover" />
                                 </div>
                                 
                                 {mainPlayer.isFolded ? (
                                     <PackedStamp />
                                 ) : (mainPlayer.status === 'playing' && mainPlayer.cards &&
-                                    <div className={`absolute -bottom-2 left-1/2 -translate-x-1/2 text-white text-xs font-black px-3 py-1 rounded-full shadow-md uppercase whitespace-nowrap z-20 ${isWaitingForSideShowResponse ? 'bg-purple-600 animate-pulse ring-2 ring-purple-400' : 'bg-blue-600'}`}>
+                                    <div className={`absolute -bottom-2 left-1/2 -translate-x-1/2 text-white text-[10px] font-black px-2 py-0.5 rounded-full shadow-md uppercase whitespace-nowrap z-20 ${isWaitingForSideShowResponse ? 'bg-purple-600 animate-pulse ring-2 ring-purple-400' : 'bg-blue-600'}`}>
                                         {isWaitingForSideShowResponse ? 'SIDE SHOW' : (mainPlayer.isSeen ? 'SEEN' : 'BLIND')}
                                     </div>
                                 )}
@@ -1848,31 +1853,31 @@ const TeenPattiGame: FC<TeenPattiGameProps> = ({
                         </div>
                         {gamePhase === 'betting' && !mainPlayer.isFolded && (
                             isWaitingForSideShowResponse ? (
-                                <div className="bg-black/30 backdrop-blur-sm border border-white/10 p-4 rounded-2xl shadow-lg h-32 flex items-center justify-center w-80">
-                                    <p className="text-yellow-400 font-bold animate-pulse text-lg">Waiting for response...</p>
+                                <div className="bg-black/30 backdrop-blur-sm border border-white/10 p-2 rounded-2xl shadow-lg h-24 flex items-center justify-center w-64">
+                                    <p className="text-yellow-400 font-bold animate-pulse text-sm">Waiting for response...</p>
                                 </div>
                             ) : (
-                                <div className={`bg-black/30 backdrop-blur-sm border border-white/10 p-4 rounded-2xl flex items-end justify-center gap-2 shadow-lg transition-all duration-300 ${!isMyTurn ? 'grayscale opacity-60' : ''}`}>
-                                    <button onClick={() => onPlayerAction('fold', localPlayerUniqueId!)} disabled={!isMyTurn} className="w-14 h-14 bg-red-600 rounded-full flex items-center justify-center font-black text-sm uppercase shadow-lg transition-transform active:scale-95 disabled:cursor-not-allowed">Pack</button>
-                                    {!mainPlayer.isSeen && <button onClick={() => onPlayerAction('see', localPlayerUniqueId!)} disabled={!isMyTurn} className="w-14 h-14 bg-yellow-500 rounded-full flex items-center justify-center font-black text-sm uppercase shadow-lg transition-transform active:scale-95 disabled:cursor-not-allowed">See</button>}
+                                <div className={`bg-black/30 backdrop-blur-sm border border-white/10 p-2 rounded-2xl flex items-end justify-center gap-2 shadow-lg transition-all duration-300 ${!isMyTurn ? 'grayscale opacity-60' : ''}`}>
+                                    <button onClick={() => onPlayerAction('fold', localPlayerUniqueId!)} disabled={!isMyTurn} className="w-12 h-12 bg-red-600 rounded-full flex items-center justify-center font-black text-xs uppercase shadow-lg transition-transform active:scale-95 disabled:cursor-not-allowed">Pack</button>
+                                    {!mainPlayer.isSeen && <button onClick={() => onPlayerAction('see', localPlayerUniqueId!)} disabled={!isMyTurn} className="w-12 h-12 bg-yellow-500 rounded-full flex items-center justify-center font-black text-xs uppercase shadow-lg transition-transform active:scale-95 disabled:cursor-not-allowed">See</button>}
                                     
                                     {mainPlayer.isSeen && activePlayersCount > 2 &&
-                                        <button onClick={() => onPlayerAction('sideShow', localPlayerUniqueId!)} disabled={!isMyTurn} className="w-14 h-14 bg-purple-600 rounded-full flex flex-col items-center justify-center font-black text-sm uppercase shadow-lg transition-transform active:scale-95 disabled:cursor-not-allowed disabled:bg-gray-500">
+                                        <button onClick={() => onPlayerAction('sideShow', localPlayerUniqueId!)} disabled={!isMyTurn} className="w-12 h-12 bg-purple-600 rounded-full flex flex-col items-center justify-center font-black text-[10px] uppercase shadow-lg transition-transform active:scale-95 disabled:cursor-not-allowed disabled:bg-gray-500">
                                             Side Show
-                                            <span className="text-xs">₹{actionAmount}</span>
+                                            <span className="text-[9px]">₹{actionAmount}</span>
                                         </button>
                                     }
                                     
                                     {activePlayersCount === 2 &&
-                                        <button onClick={() => onPlayerAction('show', localPlayerUniqueId!)} disabled={!isMyTurn} className="w-14 h-14 bg-blue-600 rounded-full flex flex-col items-center justify-center font-black text-sm uppercase shadow-lg transition-transform active:scale-95 disabled:cursor-not-allowed disabled:bg-gray-500">
+                                        <button onClick={() => onPlayerAction('show', localPlayerUniqueId!)} disabled={!isMyTurn} className="w-12 h-12 bg-blue-600 rounded-full flex flex-col items-center justify-center font-black text-[10px] uppercase shadow-lg transition-transform active:scale-95 disabled:cursor-not-allowed disabled:bg-gray-500">
                                             Show
-                                            <span className="text-xs">₹{actionAmount}</span>
+                                            <span className="text-[9px]">₹{actionAmount}</span>
                                         </button>
                                     }
 
-                                    <button onClick={() => onPlayerAction('chaal', localPlayerUniqueId!)} disabled={!isMyTurn} className="w-20 h-20 bg-green-600 rounded-full flex flex-col items-center justify-center font-black text-base uppercase shadow-lg transition-transform active:scale-95 disabled:cursor-not-allowed">
+                                    <button onClick={() => onPlayerAction('chaal', localPlayerUniqueId!)} disabled={!isMyTurn} className="w-16 h-16 bg-green-600 rounded-full flex flex-col items-center justify-center font-black text-sm uppercase shadow-lg transition-transform active:scale-95 disabled:cursor-not-allowed">
                                         {mainPlayer.isSeen ? 'Chaal' : 'Blind'}
-                                        <span className="text-xl">₹{chaalAmount}</span>
+                                        <span className="text-xs">₹{chaalAmount}</span>
                                     </button>
                                 </div>
                             )
@@ -2131,9 +2136,9 @@ const HousieGameOverModal: FC<{
                     <h3 className="font-bold text-gray-700 mb-2 text-center uppercase tracking-wider">Winners Board</h3>
                     <ul className="space-y-2">
                         {WINNING_PATTERNS
-                            .filter(p => (gameState.prizesConfig[p.key]?.count ?? 0) > 0)
+                            .filter(p => (gameState.prizesConfig?.[p.key]?.count ?? 0) > 0)
                             .map(pattern => {
-                                const winners = gameState.winners[pattern.key] || [];
+                                const winners = gameState.winners?.[pattern.key] || [];
                                 return (
                                     <li key={pattern.key} className="bg-gray-50 p-3 rounded-lg border">
                                         <p className="font-bold text-sm text-blue-700">{pattern.label}</p>
