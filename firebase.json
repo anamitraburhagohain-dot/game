@@ -1,7 +1,6 @@
-// firebase.json
 {
   "hosting": {
-    "public": "dist", // Change this line
+    "public": ".",
     "ignore": [
       "firebase.json",
       "**/.*",
