@@ -1,3 +1,4 @@
+
 import { db, isFirebaseConfigured } from './firebaseConfig';
 import { ref, get, set, update, runTransaction, onValue } from "firebase/database";
 import { TOTAL_NUMBERS, WINNING_PATTERNS } from './constants';
@@ -49,8 +50,7 @@ const generateValidRowPattern = (): boolean[] => {
     const pattern = [true, true, true, true, true, false, false, false, false];
     
     // Keep shuffling until a valid pattern is found
-    // Loop max 100 times to prevent infinite loops in rare cases
-    for (let attempts = 0; attempts < 100; attempts++) {
+    while (true) {
         // Fisher-Yates shuffle
         for (let i = pattern.length - 1; i > 0; i--) {
             const j = Math.floor(Math.random() * (i + 1));
@@ -70,19 +70,21 @@ const generateValidRowPattern = (): boolean[] => {
             return pattern;
         }
     }
-    // Fallback if loop exceeded (very unlikely) - return a simple valid pattern
-    return [true, false, true, false, true, false, true, false, true];
 };
 
 
 /**
  * Standard 3x9 Housie Ticket Generator (Improved Layout)
+ * - 3 rows, 9 columns.
+ * - Each row has exactly 5 numbers.
+ * - Each column has at least 1 number, and no more than 2.
+ * - Horizontally, no more than 2 consecutive numbers or blanks.
+ * - No 2x2 blocks of empty cells.
  */
 const generateTicket = (): TicketGrid => {
     let layout: boolean[][];
     
-    // Safety break after 50 attempts to prevent hanging
-    for(let attempts = 0; attempts < 50; attempts++) {
+    while (true) {
         layout = [
             generateValidRowPattern(),
             generateValidRowPattern(),
@@ -100,10 +102,11 @@ const generateTicket = (): TicketGrid => {
         }
         if (!isLayoutValid) continue;
 
-        // NEW SPREAD VALIDATION: Prevent 2x2 blocks of empty cells
+        // NEW SPREAD VALIDATION: Prevent 2x2 blocks of empty cells to improve visual distribution
         let hasEmptyPatch = false;
-        for (let r = 0; r <= 1; r++) { 
-            for (let c = 0; c <= 7; c++) { 
+        for (let r = 0; r <= 1; r++) { // Check rows 0-1 and 1-2
+            for (let c = 0; c <= 7; c++) { // Check cols 0-7 and 1-8
+                // Check for a 2x2 square of 'false' (empty)
                 if (!layout[r][c] && !layout[r][c + 1] && !layout[r + 1][c] && !layout[r + 1][c + 1]) {
                     hasEmptyPatch = true;
                     break;
@@ -117,47 +120,48 @@ const generateTicket = (): TicketGrid => {
         }
 
         if (isLayoutValid) {
-            // Found a valid layout, populate numbers
-            const grid: TicketGrid = Array.from({ length: 3 }, () => Array(9).fill(null));
-            const colNumbers = Array.from({ length: 9 }, (_, i) => {
-                const min = i * 10 + 1;
-                const max = i === 8 ? 90 : (i + 1) * 10;
-                const nums = Array.from({ length: max - min + 1 }, (_, k) => min + k);
-                for (let j = nums.length - 1; j > 0; j--) {
-                    const k = Math.floor(Math.random() * (j + 1));
-                    [nums[j], nums[k]] = [nums[k], nums[j]];
-                }
-                return nums;
-            });
-
-            for (let c = 0; c < 9; c++) {
-                for (let r = 0; r < 3; r++) {
-                    if (layout[r][c]) {
-                        grid[r][c] = colNumbers[c].pop()!;
-                    }
-                }
-            }
-
-            for (let c = 0; c < 9; c++) {
-                const valsInCol = [grid[0][c], grid[1][c], grid[2][c]].filter(v => v !== null) as number[];
-                valsInCol.sort((a, b) => a - b);
-                let vIdx = 0;
-                for (let r = 0; r < 3; r++) {
-                    if (grid[r][c] !== null) {
-                        grid[r][c] = valsInCol[vIdx++];
-                    }
-                }
-            }
-            return grid;
+            break;
         }
     }
-    
-    // Fallback grid if generation fails after attempts (prevents infinite loop white screen)
-    return [
-        [1, null, 20, null, 42, null, 61, null, 85],
-        [null, 15, null, 33, null, 55, null, 77, null],
-        [8, null, 25, null, 48, null, 66, null, 90]
-    ];
+
+    // Now, populate the valid layout with numbers.
+    const grid: TicketGrid = Array.from({ length: 3 }, () => Array(9).fill(null));
+
+    // Prepare shuffled number pools for each column.
+    const colNumbers = Array.from({ length: 9 }, (_, i) => {
+        const min = i * 10 + 1;
+        const max = i === 8 ? 90 : (i + 1) * 10;
+        const nums = Array.from({ length: max - min + 1 }, (_, k) => min + k);
+        // Fisher-Yates shuffle
+        for (let j = nums.length - 1; j > 0; j--) {
+            const k = Math.floor(Math.random() * (j + 1));
+            [nums[j], nums[k]] = [nums[k], nums[j]];
+        }
+        return nums;
+    });
+
+    // Place numbers from the pools into the grid based on the generated layout.
+    for (let c = 0; c < 9; c++) {
+        for (let r = 0; r < 3; r++) {
+            if (layout[r][c]) {
+                grid[r][c] = colNumbers[c].pop()!;
+            }
+        }
+    }
+
+    // Finally, sort the numbers within each column vertically.
+    for (let c = 0; c < 9; c++) {
+        const valsInCol = [grid[0][c], grid[1][c], grid[2][c]].filter(v => v !== null) as number[];
+        valsInCol.sort((a, b) => a - b);
+        let vIdx = 0;
+        for (let r = 0; r < 3; r++) {
+            if (grid[r][c] !== null) {
+                grid[r][c] = valsInCol[vIdx++];
+            }
+        }
+    }
+
+    return grid;
 };
 
 const sanitizeWinners = (w: any): Winners => {
@@ -235,9 +239,8 @@ const checkAllWinners = (
         
         // Row Lines
         const checkRow = (rowIdx: number) => {
-          if (!t.grid[rowIdx]) return false;
           const rowNums = t.grid[rowIdx].filter(n => n !== null) as number[];
-          return rowNums.length > 0 && rowNums.every(n => called.has(n));
+          return rowNums.every(n => called.has(n));
         };
         if (checkRow(0)) currentStatus['topLine'].push(t);
         if (checkRow(1)) currentStatus['middleLine'].push(t);
@@ -319,22 +322,11 @@ export const api = {
             const unsub = onValue(gameRef, (snapshot) => {
                 const val = snapshot.val();
                 if (val) {
-                    // Defensively ensure essential arrays and objects exist to prevent render crashes from partial data
-                    if (!val.calledNumbers) val.calledNumbers = [];
-                    if (!val.extraTickets) val.extraTickets = [];
-                    if (!val.shuffledQueue) val.shuffledQueue = [];
-                    if (!val.winners) val.winners = {};
-                    if (!val.prizesConfig) val.prizesConfig = {};
-
                     val.winners = sanitizeWinners(val.winners);
                     val.prizesConfig = sanitizePrizeConfig(val.prizesConfig);
                     callback(val);
                 } else {
-                    // If no game state exists in Firebase, create one.
-                    console.log("No Housie game state found. Initializing a new game...");
-                    api.resetGame().catch(error => {
-                        console.error("Failed to initialize game state:", error);
-                    });
+                    callback(null);
                 }
             });
             return unsub;
@@ -479,7 +471,7 @@ export const api = {
             mockState = freshState;
             notifyMockListeners();
         } else {
-            if (!db) return Promise.reject(new Error("Firebase is not initialized."));
+            if (!db) return;
             // For Firebase, completely overwrite the gameState with the fresh state.
             await set(ref(db, 'housie/gameState'), freshState);
         }
@@ -496,7 +488,7 @@ export const api = {
                 notifyMockListeners();
             }
         } else {
-            if (!db) return Promise.reject(new Error("Firebase is not initialized."));
+            if (!db) return;
             await update(ref(db, 'housie/gameState'), settings);
         }
     }
