@@ -1,4 +1,3 @@
-
 import { db, isFirebaseConfigured } from './firebaseConfig';
 import { ref, get, set, update, runTransaction, onValue } from "firebase/database";
 import { TOTAL_NUMBERS, WINNING_PATTERNS } from './constants';
@@ -79,48 +78,34 @@ const generateValidRowPattern = (): boolean[] => {
  * - Each row has exactly 5 numbers.
  * - Each column has at least 1 number, and no more than 2.
  * - Horizontally, no more than 2 consecutive numbers or blanks.
- * - No 2x2 blocks of empty cells.
  */
 const generateTicket = (): TicketGrid => {
     let layout: boolean[][];
     
+    // This loop continues until a valid ticket layout is generated.
     while (true) {
+        // Generate 3 rows, each with a valid horizontal pattern.
         layout = [
             generateValidRowPattern(),
             generateValidRowPattern(),
             generateValidRowPattern()
         ];
 
+        // Validate the column constraints for the generated 3x9 layout.
         let isLayoutValid = true;
-        // Validate column constraints
         for (let c = 0; c < 9; c++) {
             const colSum = (layout[0][c] ? 1 : 0) + (layout[1][c] ? 1 : 0) + (layout[2][c] ? 1 : 0);
+            
+            // Each column must have 1 or 2 numbers. Not 0 or 3.
             if (colSum === 0 || colSum === 3) {
                 isLayoutValid = false;
                 break;
             }
         }
-        if (!isLayoutValid) continue;
 
-        // NEW SPREAD VALIDATION: Prevent 2x2 blocks of empty cells to improve visual distribution
-        let hasEmptyPatch = false;
-        for (let r = 0; r <= 1; r++) { // Check rows 0-1 and 1-2
-            for (let c = 0; c <= 7; c++) { // Check cols 0-7 and 1-8
-                // Check for a 2x2 square of 'false' (empty)
-                if (!layout[r][c] && !layout[r][c + 1] && !layout[r + 1][c] && !layout[r + 1][c + 1]) {
-                    hasEmptyPatch = true;
-                    break;
-                }
-            }
-            if (hasEmptyPatch) break;
-        }
-        
-        if (hasEmptyPatch) {
-            isLayoutValid = false;
-        }
-
+        // If all columns are valid, we have a good layout.
         if (isLayoutValid) {
-            break;
+            break; 
         }
     }
 
@@ -202,10 +187,7 @@ const notifyMockListeners = () => {
         stateToSend.winners = sanitizeWinners(stateToSend.winners);
         stateToSend.prizesConfig = sanitizePrizeConfig(stateToSend.prizesConfig);
     }
-    // Make notification asynchronous to avoid state updates during render cycles.
-    setTimeout(() => {
-        mockListeners.forEach(cb => cb(stateToSend));
-    }, 0);
+    mockListeners.forEach(cb => cb(stateToSend));
 };
 
 const checkAllWinners = (
@@ -267,11 +249,52 @@ const checkAllWinners = (
         }
     });
 
-    // Check Game Over (Full House limits met) - this is just one condition for game over
-    const fhLimit = prizeConfig['fullHouse']?.count ?? 1;
-    const isFullHouseOver = newWinners['fullHouse'].length >=fhLimit;
+    // Check Game Over (Full House limits met)
+    const fhLimit = prizeConfig['fullHouse']?.count || 1;
+    const isGameOver = newWinners['fullHouse'].length >=fhLimit;
 
-    return { winners: newWinners, isGameOver: isFullHouseOver };
+    return { winners: newWinners, isGameOver };
+};
+
+/**
+ * Creates and returns a complete, fresh initial state for a new Housie game.
+ */
+const getInitialGameState = (): GameState => {
+    // 1. Generate a fresh, shuffled queue of numbers (1-90).
+    const nums = Array.from({ length: TOTAL_NUMBERS }, (_, i) => i + 1);
+    for (let i = nums.length - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1));
+        [nums[i], nums[j]] = [nums[j], nums[i]];
+    }
+
+    // 2. Generate 100 new, unbooked tickets.
+    const tickets: Ticket[] = Array.from({ length: 100 }, (_, i) => ({
+        id: i + 1,
+        grid: generateTicket(),
+        owner: null
+    }));
+
+    // 3. Create the default configuration for prizes.
+    const defaultPrizesConfig: Record<string, PrizeConfig> = {};
+    WINNING_PATTERNS.forEach(p => {
+        defaultPrizesConfig[p.key] = { label: p.label, count: 1 };
+    });
+    
+    // 4. Assemble and return the complete initial game state object.
+    return {
+        calledNumbers: [],
+        currentNumber: null,
+        previousNumber: null,
+        shuffledQueue: nums,
+        extraTickets: tickets,
+        winners: {}, // Winners list is cleared
+        prizesConfig: defaultPrizesConfig,
+        isGameOver: false,
+        activeTicketLimit: 100,
+        isAutoPlaying: false,
+        lastCallTimestamp: Date.now(),
+        scheduledStartTime: null
+    };
 };
 
 
@@ -279,35 +302,8 @@ export const api = {
     subscribe: (callback: (state: GameState | null) => void) => {
         if (USE_MOCK) {
             if (!mockState) {
-                // Initial Mock State
-                const nums = Array.from({ length: 90 }, (_, i) => i + 1);
-                // Shuffle for queue
-                for (let i = nums.length - 1; i > 0; i--) {
-                    const j = Math.floor(Math.random() * (i + 1));
-                    [nums[i], nums[j]] = [nums[j], nums[i]];
-                }
-                
-                // Generate 100 tickets
-                const tickets: Ticket[] = Array.from({ length: 100 }, (_, i) => ({
-                    id: i + 1,
-                    grid: generateTicket(),
-                    owner: null
-                }));
-
-                mockState = {
-                    calledNumbers: [],
-                    currentNumber: null,
-                    previousNumber: null,
-                    shuffledQueue: nums,
-                    extraTickets: tickets,
-                    winners: {}, // Will be populated by sanitizeWinners
-                    prizesConfig: {}, // Will be populated by sanitizePrizeConfig
-                    isGameOver: false,
-                    activeTicketLimit: 100,
-                    isAutoPlaying: false,
-                    lastCallTimestamp: Date.now(),
-                    scheduledStartTime: null
-                };
+                // Create the initial state using the new helper function
+                mockState = getInitialGameState();
             }
             mockListeners.push(callback);
             notifyMockListeners();
@@ -337,45 +333,23 @@ export const api = {
         if (USE_MOCK) {
             if (!mockState || mockState.isGameOver || mockState.shuffledQueue.length === 0) return;
             
-            const newQueue = [...mockState.shuffledQueue];
-            const nextNum = newQueue.shift()!;
+            const nextNum = mockState.shuffledQueue.shift()!;
             const prev = mockState.currentNumber;
-            const newCalledNumbers = [...mockState.calledNumbers, nextNum];
-
-            const sanitizedPrizes = sanitizePrizeConfig(mockState.prizesConfig);
-            const { winners, isGameOver: isFullHouseOver } = checkAllWinners(
+            mockState.previousNumber = prev;
+            mockState.currentNumber = nextNum;
+            mockState.calledNumbers.push(nextNum);
+            
+            // Check Winners
+            const { winners, isGameOver } = checkAllWinners(
                 mockState.extraTickets, 
-                newCalledNumbers, 
+                mockState.calledNumbers, 
                 mockState.activeTicketLimit,
                 mockState.winners,
-                sanitizedPrizes
+                sanitizePrizeConfig(mockState.prizesConfig)
             );
             
-            let allPrizesClaimed = true;
-            for (const p of WINNING_PATTERNS) {
-                const key = p.key;
-                const prizeConfig = sanitizedPrizes[key];
-                if (prizeConfig && prizeConfig.count > 0) { // Only check enabled prizes
-                    const winnersForKey = winners[key] || [];
-                    if (winnersForKey.length < prizeConfig.count) {
-                        allPrizesClaimed = false;
-                        break;
-                    }
-                }
-            }
-            const finalIsGameOver = isFullHouseOver || newQueue.length === 0 || allPrizesClaimed;
-
-            // Create a new state object instead of mutating the old one
-            mockState = {
-                ...mockState,
-                shuffledQueue: newQueue,
-                currentNumber: nextNum,
-                previousNumber: prev,
-                calledNumbers: newCalledNumbers,
-                winners: winners,
-                isGameOver: finalIsGameOver,
-                lastCallTimestamp: Date.now()
-            };
+            mockState.winners = winners;
+            mockState.isGameOver = isGameOver;
 
             notifyMockListeners();
         } else {
@@ -391,29 +365,14 @@ export const api = {
                  const nextNum = queue.shift();
                  const called = [...(currentData.calledNumbers || []), nextNum];
                  const prev = currentData.currentNumber || null;
-
-                 const sanitizedPrizes = sanitizePrizeConfig(currentData.prizesConfig);
-                 const { winners, isGameOver: isFullHouseOver } = checkAllWinners(
+                 
+                 const { winners, isGameOver } = checkAllWinners(
                      currentData.extraTickets || [],
                      called,
                      currentData.activeTicketLimit,
                      currentData.winners || {},
-                     sanitizedPrizes
+                     sanitizePrizeConfig(currentData.prizesConfig)
                  );
-                 
-                 let allPrizesClaimed = true;
-                 for (const p of WINNING_PATTERNS) {
-                     const key = p.key;
-                     const prizeConfig = sanitizedPrizes[key];
-                     if (prizeConfig && prizeConfig.count > 0) {
-                         const winnersForKey = winners[key] || [];
-                         if (winnersForKey.length < prizeConfig.count) {
-                             allPrizesClaimed = false;
-                             break;
-                         }
-                     }
-                 }
-                 const finalIsGameOver = isFullHouseOver || queue.length === 0 || allPrizesClaimed;
 
                  return {
                      ...currentData,
@@ -422,7 +381,7 @@ export const api = {
                      previousNumber: prev,
                      calledNumbers: called,
                      winners: winners,
-                     isGameOver: finalIsGameOver,
+                     isGameOver: isGameOver,
                      lastCallTimestamp: Date.now()
                  };
              });
@@ -430,49 +389,17 @@ export const api = {
     },
 
     resetGame: async () => {
-        // 1. Generate a fresh, shuffled queue of numbers for the new game.
-        const nums = Array.from({ length: 90 }, (_, i) => i + 1);
-        for (let i = nums.length - 1; i > 0; i--) {
-            const j = Math.floor(Math.random() * (i + 1));
-            [nums[i], nums[j]] = [nums[j], nums[i]];
-        }
+        // Generate a completely fresh initial state for the game.
+        const freshState = getInitialGameState();
     
-        // 2. Unbook all tickets by generating a fresh set.
-        const tickets: Ticket[] = Array.from({ length: 100 }, (_, i) => ({
-            id: i + 1,
-            grid: generateTicket(),
-            owner: null
-        }));
-    
-        // 3. Reset all prize categories to their default winner counts (which is 1).
-        const defaultPrizesConfig: Record<string, PrizeConfig> = {};
-        WINNING_PATTERNS.forEach(p => {
-            defaultPrizesConfig[p.key] = { label: p.label, count: 1 };
-        });
-    
-        // 4. Assemble the complete fresh game state.
-        const freshState: GameState = {
-            calledNumbers: [],          // Clear all called numbers.
-            currentNumber: null,
-            previousNumber: null,
-            shuffledQueue: nums,        // Use the new shuffled queue.
-            extraTickets: tickets,      // Use the new, unbooked tickets.
-            winners: {},                // Wipe the winners board clean.
-            prizesConfig: defaultPrizesConfig, // Use the explicit default prize config.
-            isGameOver: false,
-            activeTicketLimit: 100,
-            isAutoPlaying: false,
-            lastCallTimestamp: Date.now(),
-            scheduledStartTime: null
-        };
-    
-        // 5. Overwrite the entire game state in the database or mock.
+        // Overwrite the entire game state in the database or mock state.
         if (USE_MOCK) {
+            // In local mock mode, directly replace the state object and notify listeners.
             mockState = freshState;
             notifyMockListeners();
         } else {
+            // In Firebase mode, completely overwrite the gameState node.
             if (!db) return;
-            // For Firebase, completely overwrite the gameState with the fresh state.
             await set(ref(db, 'housie/gameState'), freshState);
         }
     },
@@ -480,11 +407,7 @@ export const api = {
     updateSettings: async (settings: Partial<GameState>) => {
         if (USE_MOCK) {
             if (mockState) {
-                // Create a new state object with updated settings
-                mockState = {
-                    ...mockState,
-                    ...settings
-                };
+                Object.assign(mockState, settings);
                 notifyMockListeners();
             }
         } else {
